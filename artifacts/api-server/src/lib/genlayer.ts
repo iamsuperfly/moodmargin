@@ -47,7 +47,7 @@ function parseReviewRecord(raw: string): GenLayerReview | null {
 
 async function readContract(
   functionName: string,
-  args: unknown[] = []
+  args: Array<string | number | boolean | `0x${string}`> = []
 ): Promise<unknown> {
   if (!CONTRACT_ADDRESS) {
     logger.warn("GENLAYER_CONTRACT_ADDRESS not set — GenLayer disabled");
@@ -57,8 +57,7 @@ async function readContract(
     const result = await client.readContract({
       address: CONTRACT_ADDRESS,
       functionName,
-      args,
-      stateStatus: "accepted",
+      args: args as never,
     });
     return result;
   } catch (err) {
