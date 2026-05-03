@@ -50,3 +50,35 @@ MOODMARGIN is a dark fintech meme coin perpetual trading demo with GenLayer-powe
 - Repository includes `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.npmrc`, and `tsconfig.json`
 - Set `ADMIN_PASSWORD`, `GROQ_API_KEY`, `SESSION_SECRET` as environment secrets
 - Backend services must read `PORT`
+
+## Local setup
+
+### Install
+```bash
+pnpm install
+```
+
+### Frontend
+```bash
+pnpm --filter @workspace/moodmargin run dev
+```
+
+### Backend
+```bash
+pnpm --filter @workspace/api-server run dev
+```
+
+### Database
+If Postgres is required, set `DATABASE_URL` before starting the backend.
+
+### Environment variables
+Create a local `.env` or set Replit env vars with:
+
+```bash
+PORT=8080
+DATABASE_URL=postgres://user:pass@localhost:5432/moodmargin
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=change-me
+GROQ_API_KEY=your-groq-key
+GENLAYER_CONTRACT_ADDRESS=0xe4CE4f5E6d534C51126CB5343bcaba2761eE8103
+```
