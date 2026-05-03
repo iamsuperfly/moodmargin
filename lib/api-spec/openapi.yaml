@@ -1,0 +1,879 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: MoodMargin API - meme coin perpetual trading demo platform with GenLayer risk intelligence
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: markets
+    description: Token market operations
+  - name: risk
+    description: GenLayer risk intelligence
+  - name: trading
+    description: Demo perpetual trading
+  - name: faucet
+    description: Daily MMUSD faucet
+  - name: leaderboard
+    description: Trader leaderboard
+  - name: wallet
+    description: Wallet/user operations
+  - name: ai
+    description: AI explanations
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # ──────────────────────────────────────────
+  # MARKETS
+  # ──────────────────────────────────────────
+  /markets:
+    get:
+      operationId: listMarkets
+      tags: [markets]
+      summary: List all token markets
+      parameters:
+        - in: query
+          name: verdict
+          schema:
+            type: string
+            enum: [WATCH, RESTRICT, AVOID, ALL]
+          required: false
+        - in: query
+          name: includeAvoid
+          schema:
+            type: boolean
+          required: false
+      responses:
+        "200":
+          description: List of markets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Market"
+
+  /markets/{symbol}:
+    get:
+      operationId: getMarket
+      tags: [markets]
+      summary: Get a single market by symbol
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Market detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Market"
+        "404":
+          description: Market not found
+
+  /markets/{symbol}/price:
+    get:
+      operationId: getMarketPrice
+      tags: [markets]
+      summary: Get live price for a token from DexScreener
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Price data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceData"
+
+  /markets/stats/summary:
+    get:
+      operationId: getMarketsSummary
+      tags: [markets]
+      summary: Summary stats for markets dashboard
+      responses:
+        "200":
+          description: Market summary stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketsSummary"
+
+  # ──────────────────────────────────────────
+  # RISK INTELLIGENCE (GenLayer)
+  # ──────────────────────────────────────────
+  /risk/reviews:
+    get:
+      operationId: listRiskReviews
+      tags: [risk]
+      summary: Get all risk reviews from GenLayer
+      responses:
+        "200":
+          description: All reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RiskReview"
+
+  /risk/reviews/{tokenAddress}/{chainName}:
+    get:
+      operationId: getRiskReview
+      tags: [risk]
+      summary: Get risk review for a specific token
+      parameters:
+        - in: path
+          name: tokenAddress
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: chainName
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Risk review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskReview"
+        "404":
+          description: Review not found
+
+  /risk/submit:
+    post:
+      operationId: submitTokenForReview
+      tags: [risk]
+      summary: Submit a token contract address for GenLayer risk review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitTokenBody"
+      responses:
+        "200":
+          description: Review submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitTokenResponse"
+
+  /risk/listing-requests:
+    get:
+      operationId: listListingRequests
+      tags: [risk]
+      summary: List all pending listing requests
+      responses:
+        "200":
+          description: Listing requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ListingRequest"
+
+    post:
+      operationId: createListingRequest
+      tags: [risk]
+      summary: Create a listing request for a new token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateListingRequestBody"
+      responses:
+        "201":
+          description: Listing request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingRequest"
+
+  # ──────────────────────────────────────────
+  # AI EXPLANATIONS (Groq)
+  # ──────────────────────────────────────────
+  /ai/explain-risk:
+    post:
+      operationId: explainRisk
+      tags: [ai]
+      summary: Get AI explanation for a risk verdict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExplainRiskBody"
+      responses:
+        "200":
+          description: AI explanation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIExplanation"
+
+  # ──────────────────────────────────────────
+  # TRADING
+  # ──────────────────────────────────────────
+  /trading/positions:
+    get:
+      operationId: listPositions
+      tags: [trading]
+      summary: List open positions for a wallet
+      parameters:
+        - in: query
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, closed, all]
+          required: false
+      responses:
+        "200":
+          description: Positions list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+
+    post:
+      operationId: openPosition
+      tags: [trading]
+      summary: Open a new demo perpetual position
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenPositionBody"
+      responses:
+        "201":
+          description: Position opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+        "400":
+          description: Insufficient balance or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trading/positions/{positionId}/close:
+    post:
+      operationId: closePosition
+      tags: [trading]
+      summary: Close an open position
+      parameters:
+        - in: path
+          name: positionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Position closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+
+  /trading/history:
+    get:
+      operationId: getTradeHistory
+      tags: [trading]
+      summary: Get closed trade history for a wallet
+      parameters:
+        - in: query
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+          required: false
+      responses:
+        "200":
+          description: Trade history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+
+  /trading/pnl/{walletAddress}:
+    get:
+      operationId: getWalletPnl
+      tags: [trading]
+      summary: Get realized and unrealized PnL summary for a wallet
+      parameters:
+        - in: path
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PnL summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PnlSummary"
+
+  # ──────────────────────────────────────────
+  # FAUCET
+  # ──────────────────────────────────────────
+  /faucet/status/{walletAddress}:
+    get:
+      operationId: getFaucetStatus
+      tags: [faucet]
+      summary: Get faucet claim status for a wallet
+      parameters:
+        - in: path
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Faucet status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaucetStatus"
+
+  /faucet/claim:
+    post:
+      operationId: claimFaucet
+      tags: [faucet]
+      summary: Claim 1000 MMUSD daily faucet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimFaucetBody"
+      responses:
+        "200":
+          description: Claim successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaucetClaimResult"
+        "429":
+          description: Already claimed today
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ──────────────────────────────────────────
+  # WALLET / USER
+  # ──────────────────────────────────────────
+  /wallet/{walletAddress}:
+    get:
+      operationId: getWalletProfile
+      tags: [wallet]
+      summary: Get user profile and demo balance
+      parameters:
+        - in: path
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Wallet profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletProfile"
+
+  /wallet/register:
+    post:
+      operationId: registerWallet
+      tags: [wallet]
+      summary: Register or get a wallet profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterWalletBody"
+      responses:
+        "200":
+          description: Wallet registered or returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletProfile"
+
+  # ──────────────────────────────────────────
+  # LEADERBOARD
+  # ──────────────────────────────────────────
+  /leaderboard:
+    get:
+      operationId: getLeaderboard
+      tags: [leaderboard]
+      summary: Get top traders leaderboard
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+          required: false
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [all, week, day]
+            default: all
+          required: false
+      responses:
+        "200":
+          description: Leaderboard
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LeaderboardEntry"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required: [error]
+
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+        symbol:
+          type: string
+        name:
+          type: string
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+        logoUrl:
+          type: string
+        coingeckoId:
+          type: string
+        dexPairAddress:
+          type: string
+        currentPrice:
+          type: number
+        priceChange24h:
+          type: number
+        volume24h:
+          type: number
+        liquidity:
+          type: number
+        marketCap:
+          type: number
+        verdict:
+          type: string
+          enum: [WATCH, RESTRICT, AVOID, UNREVIEWED]
+        maxLeverage:
+          type: integer
+        tradingEnabled:
+          type: boolean
+        riskScore:
+          type: integer
+        createdAt:
+          type: string
+      required: [id, symbol, name, verdict, tradingEnabled]
+
+    PriceData:
+      type: object
+      properties:
+        symbol:
+          type: string
+        price:
+          type: number
+        priceChange24h:
+          type: number
+        volume24h:
+          type: number
+        liquidity:
+          type: number
+        updatedAt:
+          type: string
+      required: [symbol, price]
+
+    MarketsSummary:
+      type: object
+      properties:
+        totalMarkets:
+          type: integer
+        watchCount:
+          type: integer
+        restrictCount:
+          type: integer
+        avoidCount:
+          type: integer
+        unreviewedCount:
+          type: integer
+        totalVolume24h:
+          type: number
+        topGainer:
+          $ref: "#/components/schemas/Market"
+        topLoser:
+          $ref: "#/components/schemas/Market"
+      required: [totalMarkets, watchCount, restrictCount, avoidCount, unreviewedCount]
+
+    RiskReview:
+      type: object
+      properties:
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+        tokenSymbol:
+          type: string
+        reviewTimestamp:
+          type: integer
+        riskScore:
+          type: integer
+        topHolderBps:
+          type: integer
+        top10Bps:
+          type: integer
+        ownershipStatus:
+          type: string
+        liquidityStatus:
+          type: string
+        deployerRiskNote:
+          type: string
+        recommendation:
+          type: string
+          enum: [WATCH, RESTRICT, AVOID]
+        explanation:
+          type: string
+        aiExplanation:
+          type: string
+      required: [tokenAddress, chainName, tokenSymbol, riskScore, recommendation]
+
+    SubmitTokenBody:
+      type: object
+      properties:
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+        walletAddress:
+          type: string
+      required: [tokenAddress, chainName, walletAddress]
+
+    SubmitTokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        review:
+          $ref: "#/components/schemas/RiskReview"
+        message:
+          type: string
+      required: [success, message]
+
+    ListingRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+        tokenSymbol:
+          type: string
+        tokenName:
+          type: string
+        submittedBy:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        verdict:
+          type: string
+        notes:
+          type: string
+        createdAt:
+          type: string
+      required: [id, tokenAddress, chainName, submittedBy, status, createdAt]
+
+    CreateListingRequestBody:
+      type: object
+      properties:
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+        tokenSymbol:
+          type: string
+        tokenName:
+          type: string
+        submittedBy:
+          type: string
+        notes:
+          type: string
+      required: [tokenAddress, chainName, submittedBy]
+
+    ExplainRiskBody:
+      type: object
+      properties:
+        tokenSymbol:
+          type: string
+        recommendation:
+          type: string
+        riskScore:
+          type: integer
+        explanation:
+          type: string
+        topHolderBps:
+          type: integer
+        top10Bps:
+          type: integer
+        ownershipStatus:
+          type: string
+        liquidityStatus:
+          type: string
+      required: [tokenSymbol, recommendation, riskScore]
+
+    AIExplanation:
+      type: object
+      properties:
+        tokenSymbol:
+          type: string
+        explanation:
+          type: string
+        verdict:
+          type: string
+        keyRisks:
+          type: array
+          items:
+            type: string
+        beginner_summary:
+          type: string
+      required: [tokenSymbol, explanation, verdict]
+
+    Position:
+      type: object
+      properties:
+        id:
+          type: string
+        walletAddress:
+          type: string
+        marketSymbol:
+          type: string
+        marketName:
+          type: string
+        direction:
+          type: string
+          enum: [long, short]
+        leverage:
+          type: integer
+        collateral:
+          type: number
+        size:
+          type: number
+        entryPrice:
+          type: number
+        currentPrice:
+          type: number
+        liquidationPrice:
+          type: number
+        unrealizedPnl:
+          type: number
+        realizedPnl:
+          type: number
+        status:
+          type: string
+          enum: [open, closed]
+        openedAt:
+          type: string
+        closedAt:
+          type: string
+      required: [id, walletAddress, marketSymbol, direction, leverage, collateral, size, entryPrice, status]
+
+    OpenPositionBody:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+        marketSymbol:
+          type: string
+        direction:
+          type: string
+          enum: [long, short]
+        leverage:
+          type: integer
+        collateral:
+          type: number
+      required: [walletAddress, marketSymbol, direction, leverage, collateral]
+
+    PnlSummary:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+        totalRealizedPnl:
+          type: number
+        totalUnrealizedPnl:
+          type: number
+        totalPnl:
+          type: number
+        winRate:
+          type: number
+        totalTrades:
+          type: integer
+        winningTrades:
+          type: integer
+        losingTrades:
+          type: integer
+        bestTrade:
+          type: number
+        worstTrade:
+          type: number
+      required: [walletAddress, totalRealizedPnl, totalUnrealizedPnl, totalPnl]
+
+    FaucetStatus:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+        canClaim:
+          type: boolean
+        nextClaimAt:
+          type: string
+        lastClaimedAt:
+          type: string
+        totalClaimed:
+          type: number
+        claimAmount:
+          type: number
+      required: [walletAddress, canClaim, claimAmount]
+
+    ClaimFaucetBody:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+      required: [walletAddress]
+
+    FaucetClaimResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        amount:
+          type: number
+        newBalance:
+          type: number
+        nextClaimAt:
+          type: string
+        message:
+          type: string
+      required: [success, amount, newBalance]
+
+    WalletProfile:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+        mmUsdBalance:
+          type: number
+        totalRealizedPnl:
+          type: number
+        totalTrades:
+          type: integer
+        rank:
+          type: integer
+        openPositionsCount:
+          type: integer
+        createdAt:
+          type: string
+        lastSeenAt:
+          type: string
+      required: [walletAddress, mmUsdBalance]
+
+    RegisterWalletBody:
+      type: object
+      properties:
+        walletAddress:
+          type: string
+      required: [walletAddress]
+
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        walletAddress:
+          type: string
+        totalPnl:
+          type: number
+        totalTrades:
+          type: integer
+        winRate:
+          type: number
+        mmUsdBalance:
+          type: number
+        bestTrade:
+          type: number
+      required: [rank, walletAddress, totalPnl, totalTrades]

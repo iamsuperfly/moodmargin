@@ -1,0 +1,43 @@
+modules = ["nodejs-24", "postgresql-16", "python-3.11"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 80
+
+[[ports]]
+localPort = 18375
+externalPort = 3000
+
+[nix]
+channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+GENLAYER_RPC_URL = "https://studio.genlayer.com/api"
+GENLAYER_CONTRACT_ADDRESS = "0xe4CE4f5E6d534C51126CB5343bcaba2761eE8103"
+GENLAYER_CHAIN_ID = "61999"
+VITE_WALLETCONNECT_PROJECT_ID = "0b6358b2129b568cdf2b6aed5f56d213"
