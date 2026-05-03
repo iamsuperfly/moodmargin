@@ -26,7 +26,6 @@ MOODMARGIN is a dark fintech meme coin perpetual trading demo with GenLayer-powe
 - `/risk` risk board with AI explanations
 - `/submit` community token submission
 - `/dashboard` wallet dashboard
-- `/admin` hidden admin panel (password-protected, not linked from nav)
 - `/faucet` test MMUSD faucet
 - `/leaderboard` top traders
 
@@ -38,20 +37,6 @@ MOODMARGIN is a dark fintech meme coin perpetual trading demo with GenLayer-powe
 - `GET /api/risk/listing-requests` — community listing queue
 - `POST /api/trading/positions` — open position
 - `POST /api/trading/positions/:id/close` — close position
-- `GET /api/admin/*` — admin endpoints (requires X-Admin-Key header)
-
-## Admin Panel (`/admin`)
-Hidden route, not linked from navbar. Password-gated via `ADMIN_PASSWORD` env var.
-
-### Sections
-- **Stats**: unique wallets, total volume, open positions, PnL, verdict breakdown, most traded
-- **Markets**: all listed tokens with live verdict override and remove controls
-- **Listings**: community listing queue — approve (auto-creates market) or reject
-- **Add Token**: whitelist a new token by CA + chain, bypassing community queue
-- **Live Memecoins**: top boosted and highest-volume meme pairs from DexScreener
-
-### Setup
-Set `ADMIN_PASSWORD` as an environment variable on the server. The frontend stores the key in `localStorage` after first login.
 
 ## Verdict Rules
 | Verdict | Listing | Max Leverage | Notes |
@@ -62,5 +47,6 @@ Set `ADMIN_PASSWORD` as an environment variable on the server. The frontend stor
 
 ## Notes
 - API server and web app run through Replit workflows
+- Repository includes `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.npmrc`, and `tsconfig.json`
 - Set `ADMIN_PASSWORD`, `GROQ_API_KEY`, `SESSION_SECRET` as environment secrets
 - Backend services must read `PORT`
