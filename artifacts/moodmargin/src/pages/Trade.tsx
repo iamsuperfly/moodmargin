@@ -56,7 +56,12 @@ export default function Trade() {
   const price = livePrice?.price ?? priceData?.price ?? market?.currentPrice ?? 0;
   const change24h = livePrice?.priceChange24h ?? priceData?.priceChange24h ?? market?.priceChange24h ?? 0;
   const verdict = market?.verdict ?? "UNREVIEWED";
-  const maxLeverage = market?.maxLeverage ?? 10;
+  const maxLeverage =
+    verdict === "WATCH"
+      ? Math.min(market?.maxLeverage ?? 5, 5)
+      : verdict === "RESTRICT"
+      ? Math.min(market?.maxLeverage ?? 2, 2)
+      : market?.maxLeverage ?? 10;
   const tradingEnabled = market?.tradingEnabled !== false && verdict !== "AVOID";
 
   const leverageOptions = [2, 5, 10].filter((l) => l <= maxLeverage);
@@ -173,6 +178,16 @@ export default function Trade() {
           </div>
         </div>
       </div>
+
+      {verdict === "WATCH" && (
+        <div className="mb-4 flex items-start gap-3 p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10" data-testid="banner-watch">
+          <AlertTriangle className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+          <div>
+            <div className="font-semibold text-emerald-400 text-sm">Normal Listing</div>
+            <div className="text-xs text-emerald-300/80 mt-0.5">This token is approved for standard trading with maximum leverage limited to {maxLeverage}x.</div>
+          </div>
+        </div>
+      )}
 
       {verdict === "RESTRICT" && (
         <div className="mb-4 flex items-start gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/10" data-testid="banner-restrict">

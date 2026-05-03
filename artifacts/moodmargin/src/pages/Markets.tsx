@@ -43,8 +43,8 @@ export default function Markets() {
       </div>
 
       {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          [
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          {[
             { label: "Total Markets", value: summary.totalMarkets, color: "text-foreground" },
             { label: "Watch", value: summary.watchCount, color: "text-emerald-400" },
             { label: "Restrict", value: summary.restrictCount, color: "text-amber-400" },
@@ -70,7 +70,7 @@ export default function Markets() {
           />
         </div>
         <div className="flex gap-2">
-          {( ["ALL", "WATCH", "RESTRICT"] as VerdictFilter[] ).map((v) => (
+          {( ["ALL", "WATCH", "RESTRICT", "AVOID"] as VerdictFilter[] ).map((v) => (
             <Button
               key={v}
               variant={filter === v ? "default" : "outline"}
@@ -157,7 +157,11 @@ export default function Markets() {
               </div>
 
               <div>
-                {market.tradingEnabled ? (
+                {market.verdict === "AVOID" ? (
+                  <Button size="sm" variant="outline" disabled className="text-xs text-red-400 border-red-500/20">
+                    Hidden
+                  </Button>
+                ) : market.tradingEnabled ? (
                   <Link href={`/trade/${market.symbol}`}>
                     <Button size="sm" className="bg-primary hover:bg-primary/90 gap-1 text-xs" data-testid={`button-trade-${market.symbol}`}>
                       Trade <ArrowRight className="w-3 h-3" />
