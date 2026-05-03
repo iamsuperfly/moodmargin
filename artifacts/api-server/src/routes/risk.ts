@@ -14,7 +14,6 @@ import { randomUUID } from "crypto";
 
 const router = Router();
 
-// GET /risk/reviews
 router.get("/reviews", async (req, res) => {
   try {
     const reviews = await getAllReviews();
@@ -25,7 +24,6 @@ router.get("/reviews", async (req, res) => {
   }
 });
 
-// GET /risk/reviews/:tokenAddress/:chainName
 router.get("/reviews/:tokenAddress/:chainName", async (req, res) => {
   try {
     const { tokenAddress, chainName } = GetRiskReviewParams.parse(req.params);
@@ -38,42 +36,35 @@ router.get("/reviews/:tokenAddress/:chainName", async (req, res) => {
   }
 });
 
-// POST /risk/submit
 router.post("/submit", async (req, res) => {
   try {
     const body = SubmitTokenForReviewBody.parse(req.body);
-
-    // Fetch token data from DexScreener
     const pairData = await fetchTokenByAddress(body.tokenAddress, body.chainName);
-
-    // Check for existing review from GenLayer
     const existing = await getReview(body.tokenAddress, body.chainName);
     if (existing) {
       return res.json({ success: true, review: existing, message: "Review already exists for this token" });
     }
 
     const tokenSymbol = pairData?.baseToken?.symbol ?? body.tokenAddress.slice(0, 8).toUpperCase();
-
-    // Try RugCheck first (works best for Solana tokens, returns null for unsupported chains)
     const rugCheckReport = await fetchRugCheckReport(body.tokenAddress);
 
-    let riskData: {
-      riskScore: number;
-      topHolderBps: number;
-      top10Bps: number;
-      ownershipStatus: string;
-      liquidityStatus: string;
-      deployerRiskNote: string;
-      recommendation: "WATCH" | "RESTRICT" | "AVOID";
-      explanation: string;
-    };
+    let riskData:
+      | {
+          riskScore: number;
+          topHolderBps: number;
+          top10Bps: number;
+          ownershipStatus: string;
+          liquidityStatus: string;
+          deployerRiskNote: string;
+          recommendation: "WATCH" | "RESTRICT" | "AVOID";
+          explanation: string;
+        }
+      | ReturnType<typeof normalizeRugCheckReport>;
 
     if (rugCheckReport) {
-      // Use real RugCheck data
       riskData = normalizeRugCheckReport(rugCheckReport, tokenSymbol);
       req.log.info({ tokenAddress: body.tokenAddress, source: "rugcheck", score: riskData.riskScore }, "RugCheck analysis complete");
     } else {
-      // Fallback: heuristic scoring for non-Solana tokens
       const topHolderBps = Math.floor(Math.random() * 2000) + 500;
       const top10Bps = Math.floor(Math.random() * 4000) + 2000;
       const ownershipStatus = body.chainName === "ethereum" ? "renounced" : Math.random() > 0.4 ? "renounced" : "active";
@@ -115,13 +106,14 @@ router.post("/submit", async (req, res) => {
       ...riskData,
     };
 
-    // Update market verdict if listed
     const [market] = await db
       .select()
       .from(marketsTable)
       .where(eq(marketsTable.tokenAddress, body.tokenAddress.toLowerCase()));
 
     if (market) {
+      const recommendation = riskData.recommendation;
+      const riskScore = riskData.riskScore;
       const maxLeverage = recommendation === "RESTRICT" ? 2 : recommendation === "WATCH" ? 5 : 1;
       await db
         .update(marketsTable)
@@ -141,7 +133,6 @@ router.post("/submit", async (req, res) => {
   }
 });
 
-// GET /risk/listing-requests
 router.get("/listing-requests", async (req, res) => {
   try {
     const requests = await db.select().from(listingRequestsTable).orderBy(listingRequestsTable.createdAt);
@@ -152,7 +143,6 @@ router.get("/listing-requests", async (req, res) => {
   }
 });
 
-// POST /risk/listing-requests
 router.post("/listing-requests", async (req, res) => {
   try {
     const body = CreateListingRequestBody.parse(req.body);
