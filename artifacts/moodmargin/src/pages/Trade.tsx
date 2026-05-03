@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams } from "wouter";
 import { useAccount } from "wagmi";
-import { TrendingUp, TrendingDown, AlertTriangle, Ban, ChevronDown, Wifi, WifiOff } from "lucide-react";
+import { TrendingUp, TrendingDown, AlertTriangle, Ban, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,20 +33,23 @@ export default function Trade() {
 
   const sym = symbol?.toUpperCase() ?? "PEPE";
 
-  const { data: market } = useGetMarket(sym, { query: { enabled: !!sym } });
-  const { data: priceData } = useGetMarketPrice(sym, { query: { enabled: !!sym } });
+  const { data: market } = useGetMarket(sym, {
+    query: { enabled: !!sym, queryKey: ["getMarket", sym] },
+  });
+  const { data: priceData } = useGetMarketPrice(sym, {
+    query: { enabled: !!sym, queryKey: ["getMarketPrice", sym] },
+  });
   const { data: positions } = useListPositions(
     { walletAddress: address?.toLowerCase() ?? "", status: "open" },
-    { query: { enabled: !!address } }
+    { query: { enabled: !!address, queryKey: ["listPositions", address?.toLowerCase() ?? ""] } }
   );
   const { data: profile } = useGetWalletProfile(address?.toLowerCase() ?? "", {
-    query: { enabled: !!address },
+    query: { enabled: !!address, queryKey: ["getWalletProfile", address?.toLowerCase() ?? ""] },
   });
 
   const openPosition = useOpenPosition();
   const closePosition = useClosePosition();
 
-  // Live WebSocket prices (fall back to REST polling data)
   const { getPrice, connected: wsConnected } = useLivePrices({ symbols: [sym] });
   const livePrice = getPrice(sym);
 
@@ -56,14 +59,12 @@ export default function Trade() {
   const maxLeverage = market?.maxLeverage ?? 10;
   const tradingEnabled = market?.tradingEnabled !== false && verdict !== "AVOID";
 
-  // Leverage options constrained by verdict
   const leverageOptions = [2, 5, 10].filter((l) => l <= maxLeverage);
 
   useEffect(() => {
     if (leverage > maxLeverage) setLeverage(maxLeverage);
-  }, [maxLeverage]);
+  }, [maxLeverage, leverage]);
 
-  // Simple chart placeholder using canvas
   useEffect(() => {
     if (!chartRef.current) return;
     const canvas = document.createElement("canvas");
@@ -74,12 +75,9 @@ export default function Trade() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Generate fake price history
     const points = 60;
     const w = canvas.width / points;
-    const pricePoints = Array.from({ length: points }, (_, i) => {
-      return price * (1 + (Math.random() - 0.5) * 0.05 + (change24h / 100) * (i / points));
-    });
+    const pricePoints = Array.from({ length: points }, (_, i) => price * (1 + (Math.random() - 0.5) * 0.05 + (change24h / 100) * (i / points)));
     const min = Math.min(...pricePoints) * 0.999;
     const max = Math.max(...pricePoints) * 1.001;
 
@@ -93,7 +91,6 @@ export default function Trade() {
     });
     ctx.stroke();
 
-    // Fill area under line
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
     gradient.addColorStop(0, change24h >= 0 ? "rgba(34,197,94,.15)" : "rgba(239,68,68,.15)");
     gradient.addColorStop(1, "transparent");
@@ -115,7 +112,7 @@ export default function Trade() {
     }
 
     openPosition.mutate(
-      { walletAddress: address.toLowerCase(), marketSymbol: sym, direction, leverage, collateral: col },
+      { data: { walletAddress: address.toLowerCase(), marketSymbol: sym, direction, leverage, collateral: col } },
       {
         onSuccess: () => {
           toast({ title: "Position opened", description: `${direction.toUpperCase()} ${sym} x${leverage} — ${col} MMUSD` });
@@ -137,10 +134,7 @@ export default function Trade() {
       {
         onSuccess: (pos) => {
           const pnl = pos.realizedPnl ?? 0;
-          toast({
-            title: "Position closed",
-            description: `PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} MMUSD`,
-          });
+          toast({ title: "Position closed", description: `PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} MMUSD` });
           queryClient.invalidateQueries({ queryKey: getListPositionsQueryKey({ walletAddress: address?.toLowerCase() ?? "" }) });
           queryClient.invalidateQueries({ queryKey: getGetWalletProfileQueryKey(address?.toLowerCase() ?? "") });
         },
@@ -149,10 +143,10 @@ export default function Trade() {
   };
 
   const size = parseFloat(collateral || "0") * leverage;
+  const openPnL = (positions ?? []).filter((p) => p.marketSymbol === sym).reduce((sum, pos) => sum + (pos.unrealizedPnl ?? 0), 0);
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
       <div className="flex items-center gap-4 mb-6">
         <div>
           <div className="flex items-center gap-3">
@@ -167,11 +161,19 @@ export default function Trade() {
               {change24h >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               {change24h >= 0 ? "+" : ""}{change24h.toFixed(2)}%
             </span>
+            {wsConnected ? (
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-400"><Wifi className="w-3 h-3" /> LIVE</span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><WifiOff className="w-3 h-3" /> Connecting…</span>
+            )}
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Open PnL: <span className={openPnL >= 0 ? "text-profit" : "text-loss"}>{openPnL >= 0 ? "+" : ""}{openPnL.toFixed(2)} MMUSD</span>
+            {profile?.walletAddress && <> · Wallet: {profile.walletAddress.slice(0, 6)}…</>}
           </div>
         </div>
       </div>
 
-      {/* RESTRICT / AVOID banners */}
       {verdict === "RESTRICT" && (
         <div className="mb-4 flex items-start gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/10" data-testid="banner-restrict">
           <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
@@ -193,9 +195,7 @@ export default function Trade() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr,340px] gap-6">
-        {/* Chart + Positions */}
         <div className="space-y-6">
-          {/* Chart */}
           <div className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-center justify-between mb-4">
               <span className="text-sm font-medium">Price Chart</span>
@@ -204,7 +204,6 @@ export default function Trade() {
             <div ref={chartRef} className="w-full h-[200px] bg-background/50 rounded-lg" data-testid="chart-price" />
           </div>
 
-          {/* Open positions */}
           {isConnected && (
             <div className="rounded-xl border border-border bg-card">
               <div className="px-4 py-3 border-b border-border">
@@ -214,7 +213,7 @@ export default function Trade() {
                 <div className="py-8 text-center text-sm text-muted-foreground">No open positions</div>
               ) : (
                 <div className="divide-y divide-border">
-                  {positions.filter((p) => p.marketSymbol === sym).map((pos) => (
+                  {(positions ?? []).filter((p) => p.marketSymbol === sym).map((pos) => (
                     <div key={pos.id} className="px-4 py-3 flex items-center justify-between" data-testid={`row-position-${pos.id}`}>
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-2">
@@ -223,9 +222,7 @@ export default function Trade() {
                           </span>
                           <span className="text-xs text-muted-foreground">{pos.collateral.toFixed(0)} MMUSD</span>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          Entry: ${pos.entryPrice.toFixed(6)} | Size: ${pos.size.toFixed(0)}
-                        </div>
+                        <div className="text-xs text-muted-foreground">Entry: ${pos.entryPrice.toFixed(6)} | Size: ${pos.size.toFixed(0)}</div>
                       </div>
                       <div className="text-right">
                         <div className={`text-sm font-semibold ${(pos.unrealizedPnl ?? 0) >= 0 ? "text-profit" : "text-loss"}`} data-testid={`text-pnl-${pos.id}`}>
@@ -243,111 +240,42 @@ export default function Trade() {
           )}
         </div>
 
-        {/* Order panel */}
         <div className="rounded-xl border border-border bg-card p-5 h-fit">
           <h3 className="font-semibold mb-4">Place Order</h3>
-
-          {/* Direction */}
           <div className="grid grid-cols-2 gap-2 mb-5">
-            <Button
-              className={`gap-1.5 ${direction === "long" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-transparent border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/10"}`}
-              onClick={() => setDirection("long")}
-              disabled={!tradingEnabled}
-              data-testid="button-direction-long"
-            >
+            <Button className={`gap-1.5 ${direction === "long" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-transparent border border-emerald-600/30 text-emerald-400 hover:bg-emerald-600/10"}`} onClick={() => setDirection("long")} disabled={!tradingEnabled} data-testid="button-direction-long">
               <TrendingUp className="w-3.5 h-3.5" /> Long
             </Button>
-            <Button
-              className={`gap-1.5 ${direction === "short" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-transparent border border-red-600/30 text-red-400 hover:bg-red-600/10"}`}
-              onClick={() => setDirection("short")}
-              disabled={!tradingEnabled}
-              data-testid="button-direction-short"
-            >
+            <Button className={`gap-1.5 ${direction === "short" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-transparent border border-red-600/30 text-red-400 hover:bg-red-600/10"}`} onClick={() => setDirection("short")} disabled={!tradingEnabled} data-testid="button-direction-short">
               <TrendingDown className="w-3.5 h-3.5" /> Short
             </Button>
           </div>
 
-          {/* Leverage */}
           <div className="mb-4">
             <Label className="text-xs text-muted-foreground mb-2 block">Leverage</Label>
             <div className="flex gap-2">
               {leverageOptions.map((l) => (
-                <Button
-                  key={l}
-                  size="sm"
-                  variant={leverage === l ? "default" : "outline"}
-                  className={`flex-1 text-xs ${leverage === l ? "bg-primary" : ""}`}
-                  onClick={() => setLeverage(l)}
-                  disabled={!tradingEnabled}
-                  data-testid={`button-leverage-${l}`}
-                >
+                <Button key={l} size="sm" variant={leverage === l ? "default" : "outline"} className={`flex-1 text-xs ${leverage === l ? "bg-primary" : ""}`} onClick={() => setLeverage(l)} disabled={!tradingEnabled} data-testid={`button-leverage-${l}`}>
                   {l}x
                 </Button>
               ))}
             </div>
           </div>
 
-          {/* Collateral input */}
-          <div className="mb-4">
+          <div className="mb-5">
             <Label className="text-xs text-muted-foreground mb-2 block">Collateral (MMUSD)</Label>
-            <div className="relative">
-              <Input
-                type="number"
-                placeholder="0.00"
-                value={collateral}
-                onChange={(e) => setCollateral(e.target.value)}
-                className="pr-16"
-                disabled={!tradingEnabled}
-                data-testid="input-collateral"
-              />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">MMUSD</span>
-            </div>
-            {profile && (
-              <div className="flex justify-between mt-1.5">
-                <span className="text-xs text-muted-foreground">Balance: {profile.mmUsdBalance.toFixed(0)} MMUSD</span>
-                <button className="text-xs text-primary" onClick={() => setCollateral(String(Math.floor(profile.mmUsdBalance / 4)))}>
-                  25%
-                </button>
-              </div>
-            )}
+            <Input type="number" placeholder="0.0" value={collateral} onChange={(e) => setCollateral(e.target.value)} disabled={!tradingEnabled} data-testid="input-collateral" />
           </div>
 
-          {/* Order summary */}
-          {collateral && parseFloat(collateral) > 0 && (
-            <div className="mb-4 p-3 rounded-lg bg-muted/50 space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Size</span>
-                <span className="font-mono">${size.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Leverage</span>
-                <span className="font-mono">{leverage}x</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Entry Price</span>
-                <span className="font-mono">${price.toFixed(6)}</span>
-              </div>
-            </div>
-          )}
+          <div className="mb-5 p-3 rounded-lg bg-muted/30 space-y-2 text-sm">
+            <div className="flex justify-between text-muted-foreground"><span>Position Size</span><span data-testid="text-position-size">${size.toFixed(2)}</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>Leverage</span><span>{leverage}x</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>Max Leverage</span><span>{maxLeverage}x</span></div>
+          </div>
 
-          <Button
-            className="w-full bg-primary hover:bg-primary/90"
-            onClick={handleOpenPosition}
-            disabled={!tradingEnabled || openPosition.isPending || !isConnected}
-            data-testid="button-open-position"
-          >
-            {!isConnected
-              ? "Connect Wallet"
-              : !tradingEnabled
-              ? "Trading Disabled"
-              : openPosition.isPending
-              ? "Opening..."
-              : `${direction === "long" ? "Long" : "Short"} ${sym}`}
+          <Button className="w-full bg-primary hover:bg-primary/90" disabled={!tradingEnabled} onClick={handleOpenPosition} data-testid="button-open-position">
+            {tradingEnabled ? "Open Position" : "Trading Disabled"}
           </Button>
-
-          {verdict === "RESTRICT" && (
-            <p className="text-xs text-amber-400/80 mt-2 text-center">Max {maxLeverage}x leverage (RESTRICT)</p>
-          )}
         </div>
       </div>
     </div>
