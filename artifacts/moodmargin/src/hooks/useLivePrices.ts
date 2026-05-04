@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getApiBaseUrl } from "@/lib/api-base";
 
 export interface LivePrice {
   symbol: string;
@@ -15,6 +16,13 @@ type WsEvent =
   | { type: "pong" };
 
 function buildWsUrl(): string {
+  const apiBase = getApiBaseUrl();
+  if (apiBase) {
+    const url = new URL(apiBase);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/api/ws/prices`;
+    return url.toString();
+  }
   const base = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}${base}/api/ws/prices`;

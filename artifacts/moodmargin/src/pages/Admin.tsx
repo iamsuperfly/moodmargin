@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { getApiPath } from "@/lib/api-base";
 
-const API = "/api/admin";
+const API = getApiPath("/api/admin");
 
 function useAdminFetch<T>(path: string, key: string, adminKey: string) {
   const [data, setData] = useState<T | null>(null);
