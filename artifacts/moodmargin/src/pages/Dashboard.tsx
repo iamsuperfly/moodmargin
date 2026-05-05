@@ -42,7 +42,11 @@ export default function Dashboard() {
     { walletAddress: addr, limit: 10 },
     { query: { enabled: !!addr } }
   );
-  const { data: faucetStatus } = useGetFaucetStatus(addr, {
+  const {
+    data: faucetStatus,
+    isLoading: faucetLoading,
+    isError: faucetError,
+  } = useGetFaucetStatus(addr, {
     query: { enabled: !!addr, queryKey: getGetFaucetStatusQueryKey(addr) },
   });
   const claimFaucet = useClaimFaucet();
@@ -198,7 +202,18 @@ export default function Dashboard() {
               <Droplets className="w-4 h-4 text-primary" />
               <h3 className="font-semibold text-sm">Daily Faucet</h3>
             </div>
-            {faucetStatus?.canClaim ? (
+            {faucetLoading ? (
+              <div className="text-center text-sm text-muted-foreground py-2">Loading faucet status...</div>
+            ) : faucetError ? (
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground mb-2">Faucet status unavailable</p>
+                <Link href="/faucet">
+                  <Button variant="outline" size="sm" className="w-full text-xs">
+                    Go to Faucet Page
+                  </Button>
+                </Link>
+              </div>
+            ) : faucetStatus?.canClaim === true ? (
               <div className="text-center">
                 <p className="text-sm text-muted-foreground mb-3">1,000 MMUSD available!</p>
                 <Button className="w-full bg-primary hover:bg-primary/90" onClick={handleClaim} disabled={claimFaucet.isPending} data-testid="button-claim-dashboard">
@@ -208,6 +223,11 @@ export default function Dashboard() {
             ) : (
               <div className="text-center">
                 <p className="text-sm text-muted-foreground">Already claimed today</p>
+                {faucetStatus?.nextClaimAt && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Next: {new Date(faucetStatus.nextClaimAt).toLocaleTimeString()}
+                  </p>
+                )}
                 <Link href="/faucet">
                   <Button variant="outline" size="sm" className="mt-2 w-full text-xs">
                     View Faucet
@@ -236,7 +256,7 @@ export default function Dashboard() {
             <div className="font-mono text-xs break-all text-foreground/80" data-testid="text-wallet-address">
               {address}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">Arbitrum Sepolia (Demo)</div>
+            <div className="text-xs text-muted-foreground mt-1">Demo Network</div>
           </div>
         </div>
       </div>
