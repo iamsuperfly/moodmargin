@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
-import { Menu, X, Zap, TrendingUp } from "lucide-react";
+import { Menu, X, Zap, TrendingUp, Send, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useGetWalletProfile } from "@workspace/api-client-react";
 import { useRegisterWallet } from "@workspace/api-client-react";
@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { href: "/markets", label: "Markets" },
   { href: "/trade/PEPE", label: "Trade" },
   { href: "/risk", label: "Risk Board" },
+  { href: "/submit", label: "Submit" },
   { href: "/faucet", label: "Faucet" },
   { href: "/leaderboard", label: "Leaderboard" },
 ];
@@ -64,6 +65,20 @@ export function Navbar() {
                 </span>
               </Link>
             ))}
+            {isConnected && (
+              <Link href="/dashboard">
+                <span
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                    location === "/dashboard"
+                      ? "text-primary bg-primary/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  }`}
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  Dashboard
+                </span>
+              </Link>
+            )}
           </div>
 
           {/* Right side */}
@@ -130,6 +145,14 @@ export function Navbar() {
                 </span>
               </Link>
             ))}
+            {isConnected && (
+              <Link href="/dashboard" onClick={() => setOpen(false)}>
+                <span className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/5 cursor-pointer">
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  Dashboard
+                </span>
+              </Link>
+            )}
             <div className="pt-2 border-t border-border mt-2">
               {isConnected ? (
                 <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => disconnect()}>
