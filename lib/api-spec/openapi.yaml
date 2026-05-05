@@ -185,6 +185,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/SubmitTokenResponse"
 
+
+  /risk/finalize:
+    post:
+      operationId: finalizeTokenReview
+      tags: [risk]
+      summary: Finalize GenLayer verdict — runs Groq AI, updates market and listing status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinalizeTokenBody'
+      responses:
+        '200':
+          description: Verdict finalized with AI explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizeTokenResponse'
+        '404':
+          description: GenLayer verdict not yet confirmed
+
   /risk/listing-requests:
     get:
       operationId: listListingRequests
@@ -487,6 +509,32 @@ components:
         status:
           type: string
       required: [status]
+
+
+    FinalizeTokenBody:
+      type: object
+      properties:
+        tokenAddress:
+          type: string
+        chainName:
+          type: string
+      required: [tokenAddress, chainName]
+
+    FinalizeTokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        review:
+          $ref: '#/components/schemas/RiskReview'
+        aiExplanation:
+          $ref: '#/components/schemas/AIExplanation'
+        marketListed:
+          type: boolean
+        listingStatus:
+          type: string
+          enum: [approved, rejected]
+      required: [success, marketListed, listingStatus]
 
     ErrorResponse:
       type: object
