@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { listingRequestsTable, marketsTable } from "@workspace/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getAllReviews, getReview } from "../lib/genlayer";
-import { fetchTokenByAddress } from "../lib/dexscreener";
+import { fetchTokenByAddress, fetchTokenPrice } from "../lib/dexscreener";
 import { fetchRugCheckReport, normalizeRugCheckReport } from "../lib/rugcheck";
 import { explainTokenRisk } from "../lib/groq";
 import {
@@ -119,12 +119,7 @@ router.post("/submit", async (req, res) => {
       const maxLeverage = recommendation === "RESTRICT" ? 2 : recommendation === "WATCH" ? 5 : 1;
       await db
         .update(marketsTable)
-        .set({
-          verdict: recommendation,
-          riskScore,
-          tradingEnabled: recommendation !== "AVOID",
-          maxLeverage,
-        })
+        .set({ verdict: recommendation, riskScore, tradingEnabled: recommendation !== "AVOID", maxLeverage })
         .where(eq(marketsTable.tokenAddress, body.tokenAddress.toLowerCase()));
     }
 
@@ -136,18 +131,24 @@ router.post("/submit", async (req, res) => {
 });
 
 // POST /risk/finalize
-// Called by the frontend after the GenLayer tx is signed.
-// Polls GenLayer for the confirmed verdict, then:
-//   1. Runs Groq AI to generate a human-readable explanation
-//   2. Upserts the market with the final verdict settings (leverage caps, trading enabled)
-//   3. Marks any matching listing_requests as approved or rejected
+// Called by the frontend once GenLayer consensus is detected.
+//
+// What it does automatically:
+//   1. Reads the confirmed verdict from the GenLayer contract via getReview()
+//   2. Runs Groq AI (explainTokenRisk) → human-readable explanation + key risks + beginner summary
+//   3. Upserts the market with verdict-based settings:
+//        WATCH   → maxLeverage: 5,  tradingEnabled: true   (auto-listed)
+//        RESTRICT → maxLeverage: 2, tradingEnabled: true   (auto-listed)
+//        AVOID   → maxLeverage: 1,  tradingEnabled: false  (rejected)
+//   4. Seeds the market's initial price data from DexScreener (currentPrice, volume, liquidity)
+//   5. Updates all matching listing_requests to approved / rejected
 router.post("/finalize", async (req, res) => {
   try {
     const { tokenAddress, chainName } = z
       .object({ tokenAddress: z.string(), chainName: z.string() })
       .parse(req.body);
 
-    // Read confirmed verdict from GenLayer contract
+    // 1. Read confirmed GenLayer verdict
     const review = await getReview(tokenAddress, chainName);
     if (!review) {
       return res
@@ -155,13 +156,13 @@ router.post("/finalize", async (req, res) => {
         .json({ error: "GenLayer verdict not yet confirmed. The transaction may still be processing." });
     }
 
-    // Derive market settings from verdict
+    // Verdict-based market settings
     const maxLeverage =
       review.recommendation === "WATCH" ? 5 : review.recommendation === "RESTRICT" ? 2 : 1;
     const tradingEnabled = review.recommendation !== "AVOID";
     const listingStatus = tradingEnabled ? "approved" : "rejected";
 
-    // Run Groq AI explanation (gracefully degrades if GROQ_API_KEY not set)
+    // 2. Run Groq AI explanation (gracefully degrades if GROQ_API_KEY not set)
     const aiExplanation = await explainTokenRisk({
       tokenSymbol: review.tokenSymbol,
       recommendation: review.recommendation,
@@ -172,17 +173,15 @@ router.post("/finalize", async (req, res) => {
       ownershipStatus: review.ownershipStatus,
       liquidityStatus: review.liquidityStatus,
     });
+    req.log.info({ tokenAddress, verdict: review.recommendation }, "GenLayer finalize: Groq AI explanation generated");
 
-    req.log.info(
-      { tokenAddress, verdict: review.recommendation, riskScore: review.riskScore },
-      "GenLayer finalize: Groq AI explanation generated"
-    );
-
-    // Upsert market record
+    // 3. Upsert market with verdict settings
     const [existingMarket] = await db
       .select()
       .from(marketsTable)
       .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
+
+    let marketSymbol: string | null = existingMarket?.symbol ?? null;
 
     if (existingMarket) {
       await db
@@ -191,9 +190,10 @@ router.post("/finalize", async (req, res) => {
         .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
       req.log.info({ symbol: existingMarket.symbol, verdict: review.recommendation }, "Updated existing market from GenLayer verdict");
     } else if (tradingEnabled) {
-      // Auto-list new token when verdict is WATCH or RESTRICT
+      // Auto-list new token when WATCH or RESTRICT
       try {
         const symbol = review.tokenSymbol.toUpperCase().replace(/[^A-Z0-9]/g, "") || tokenAddress.slice(2, 8).toUpperCase();
+        marketSymbol = symbol;
         await db.insert(marketsTable).values({
           id: randomUUID(),
           symbol,
@@ -207,14 +207,19 @@ router.post("/finalize", async (req, res) => {
         });
         req.log.info({ symbol, verdict: review.recommendation }, "Auto-listed new market from GenLayer verdict");
       } catch (insertErr) {
-        // Symbol uniqueness conflict — market creation skipped, admin can add manually
         req.log.warn({ insertErr, tokenAddress }, "Auto-list skipped: symbol conflict or insert error");
+        marketSymbol = null;
       }
     } else {
-      req.log.info({ tokenAddress, verdict: review.recommendation }, "AVOID verdict: token not listed");
+      req.log.info({ tokenAddress, verdict: review.recommendation }, "AVOID verdict: token rejected, not listed");
     }
 
-    // Update all pending listing requests for this token to approved / rejected
+    // 4. Seed initial price data from DexScreener (non-blocking — runs in background after response)
+    if (tradingEnabled) {
+      seedMarketPrice(tokenAddress, chainName, marketSymbol, req.log).catch(() => {});
+    }
+
+    // 5. Update listing requests to approved / rejected
     try {
       await db
         .update(listingRequestsTable)
@@ -242,6 +247,58 @@ router.post("/finalize", async (req, res) => {
   }
 });
 
+// Fetches live price, volume, liquidity from DexScreener and writes them to the market row.
+// Fires after the finalize response is sent so it never blocks the user.
+async function seedMarketPrice(
+  tokenAddress: string,
+  chainName: string,
+  marketSymbol: string | null,
+  log: { info: Function; warn: Function }
+) {
+  try {
+    // Prefer address-based lookup (more accurate for new tokens)
+    const pairData = await fetchTokenByAddress(tokenAddress, chainName);
+    if (pairData?.priceUsd) {
+      await db
+        .update(marketsTable)
+        .set({
+          currentPrice: pairData.priceUsd,
+          priceChange24h: (pairData.priceChange?.h24 ?? 0).toString(),
+          volume24h: (pairData.volume?.h24 ?? 0).toString(),
+          liquidity: (pairData.liquidity?.usd ?? 0).toString(),
+          dexPairAddress: pairData.pairAddress ?? null,
+          priceUpdatedAt: new Date(),
+        })
+        .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
+      log.info(
+        { tokenAddress, price: pairData.priceUsd, symbol: pairData.baseToken?.symbol },
+        "Seeded initial price from DexScreener (by address)"
+      );
+      return;
+    }
+
+    // Fallback: symbol-based lookup
+    if (marketSymbol) {
+      const priceData = await fetchTokenPrice(marketSymbol);
+      if (priceData) {
+        await db
+          .update(marketsTable)
+          .set({
+            currentPrice: priceData.price.toString(),
+            priceChange24h: priceData.priceChange24h.toString(),
+            volume24h: priceData.volume24h.toString(),
+            liquidity: priceData.liquidity.toString(),
+            priceUpdatedAt: new Date(),
+          })
+          .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
+        log.info({ tokenAddress, symbol: marketSymbol, price: priceData.price }, "Seeded initial price from DexScreener (by symbol)");
+      }
+    }
+  } catch (err) {
+    log.warn({ err, tokenAddress }, "DexScreener price seed failed — skipping");
+  }
+}
+
 router.get("/listing-requests", async (req, res) => {
   try {
     const requests = await db.select().from(listingRequestsTable).orderBy(listingRequestsTable.createdAt);
@@ -255,7 +312,6 @@ router.get("/listing-requests", async (req, res) => {
 router.post("/listing-requests", async (req, res) => {
   try {
     const body = CreateListingRequestBody.parse(req.body);
-
     const [created] = await db
       .insert(listingRequestsTable)
       .values({
@@ -269,7 +325,6 @@ router.post("/listing-requests", async (req, res) => {
         notes: body.notes ?? null,
       })
       .returning();
-
     return res.status(201).json(toListingResponse(created!));
   } catch (err) {
     req.log.error({ err }, "createListingRequest error");

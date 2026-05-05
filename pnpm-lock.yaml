@@ -186,7 +186,7 @@ importers:
         version: 5.2.1
       genlayer-js:
         specifier: ^1.1.7
-        version: 1.1.7(typescript@5.9.3)
+        version: 1.1.7(typescript@5.9.3)(zod@3.25.76)
       groq-sdk:
         specifier: ^1.1.2
         version: 1.1.2
@@ -554,6 +554,9 @@ importers:
       framer-motion:
         specifier: 'catalog:'
         version: 12.35.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      genlayer-js:
+        specifier: ^1.1.7
+        version: 1.1.7(typescript@5.9.3)(zod@3.25.76)
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -5949,7 +5952,7 @@ snapshots:
 
   generator-function@2.0.1: {}
 
-  genlayer-js@1.1.7(typescript@5.9.3):
+  genlayer-js@1.1.7(typescript@5.9.3)(zod@3.25.76):
     dependencies:
       eslint-plugin-import: 2.32.0
       typescript-parsec: 0.3.4
