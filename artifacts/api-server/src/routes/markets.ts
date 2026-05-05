@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { marketsTable } from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { fetchTokenPrice } from "../lib/dexscreener";
@@ -16,15 +16,12 @@ router.get("/", async (req, res) => {
   try {
     const query = ListMarketsQueryParams.parse(req.query);
     let markets = await db.select().from(marketsTable).orderBy(desc(marketsTable.volume24h));
-
     if (query.verdict && query.verdict !== "ALL") {
       markets = markets.filter((m) => m.verdict === query.verdict);
     }
-
     if (!query.includeAvoid) {
       markets = markets.filter((m) => m.verdict !== "AVOID");
     }
-
     res.json(markets.map(toMarketResponse));
   } catch (err) {
     req.log.error({ err }, "listMarkets error");
@@ -46,8 +43,8 @@ router.get("/stats/summary", async (req, res) => {
       .map((m) => ({ ...m, change: parseFloat(m.priceChange24h ?? "0") }))
       .filter((m) => m.currentPrice && parseFloat(m.currentPrice) > 0);
 
-    const topGainer = withChange.sort((a, b) => b.change - a.change)[0] ?? null;
-    const topLoser = withChange.sort((a, b) => a.change - b.change)[0] ?? null;
+    const topGainer = [...withChange].sort((a, b) => b.change - a.change)[0] ?? null;
+    const topLoser = [...withChange].sort((a, b) => a.change - b.change)[0] ?? null;
 
     res.json({
       totalMarkets: markets.length,
@@ -65,6 +62,45 @@ router.get("/stats/summary", async (req, res) => {
   }
 });
 
+// GET /markets/:symbol/history?hours=24
+// Returns price history for sparkline charts (up to 7 days, default 24h)
+router.get("/:symbol/history", async (req, res) => {
+  try {
+    const symbol = (req.params.symbol ?? "").toUpperCase();
+    if (!symbol) return res.status(400).json({ error: "symbol required" });
+
+    const hours = Math.min(Math.max(parseInt((req.query.hours as string) ?? "24", 10) || 24, 1), 168);
+
+    const result = await pool.query<{
+      recorded_at: Date;
+      price: string;
+      price_change_24h: string;
+      volume_24h: string;
+      liquidity: string;
+    }>(
+      `SELECT recorded_at, price, price_change_24h, volume_24h, liquidity
+       FROM price_history
+       WHERE symbol = $1
+         AND recorded_at >= NOW() - INTERVAL '${hours} hours'
+       ORDER BY recorded_at ASC`,
+      [symbol]
+    );
+
+    const points = result.rows.map((r) => ({
+      t: r.recorded_at.getTime(),
+      price: parseFloat(r.price),
+      priceChange24h: parseFloat(r.price_change_24h ?? "0"),
+      volume24h: parseFloat(r.volume_24h ?? "0"),
+      liquidity: parseFloat(r.liquidity ?? "0"),
+    }));
+
+    return res.json({ symbol, hours, points });
+  } catch (err) {
+    req.log.error({ err }, "getMarketHistory error");
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // GET /markets/:symbol
 router.get("/:symbol", async (req, res) => {
   try {
@@ -73,7 +109,6 @@ router.get("/:symbol", async (req, res) => {
       .select()
       .from(marketsTable)
       .where(eq(marketsTable.symbol, symbol.toUpperCase()));
-
     if (!market) return res.status(404).json({ error: "Market not found" });
     return res.json(toMarketResponse(market));
   } catch (err) {
@@ -102,7 +137,6 @@ router.get("/:symbol/price", async (req, res) => {
       return res.status(404).json({ error: "Price not available" });
     }
 
-    // Update price in DB
     await db
       .update(marketsTable)
       .set({
@@ -114,11 +148,7 @@ router.get("/:symbol/price", async (req, res) => {
       })
       .where(eq(marketsTable.symbol, symbol.toUpperCase()));
 
-    return res.json({
-      symbol,
-      ...price,
-      updatedAt: new Date().toISOString(),
-    });
+    return res.json({ symbol, ...price, updatedAt: new Date().toISOString() });
   } catch (err) {
     req.log.error({ err }, "getMarketPrice error");
     return res.status(500).json({ error: "Internal server error" });
