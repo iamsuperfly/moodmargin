@@ -10,14 +10,14 @@ MOODMARGIN is a dark fintech meme coin perpetual trading demo with GenLayer-powe
 - DexScreener market data
 - RugCheck risk data
 - Groq-powered explanations
-- GenLayer read-only verdicts
+- GenLayer read-only verdicts via official genlayer-js SDK
 
 ## Flow
 1. User enters token contract address and network
 2. Backend fetches RugCheck data when available
-3. GenLayer produces the verdict
+3. Backend reads GenLayer contract verdict via genlayer-js from `0xe4CE4f5E6d534C51126CB5343bcaba2761eE8103`
 4. Groq explains the result in plain language
-5. Market status and leverage limits update from the verdict
+5. Market status and leverage limits update from the GenLayer verdict
 
 ## Routes
 - `/` landing
@@ -56,6 +56,7 @@ MOODMARGIN is a dark fintech meme coin perpetual trading demo with GenLayer-powe
 ### Install
 ```bash
 pnpm install
+pnpm --filter @workspace/api-server add genlayer-js
 ```
 
 ### Frontend

@@ -2,12 +2,10 @@ import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { logger } from "./logger";
 
-const CONTRACT_ADDRESS = (
-  process.env.GENLAYER_CONTRACT_ADDRESS ?? ""
+export const GENLAYER_CONTRACT_ADDRESS = (
+  process.env.GENLAYER_CONTRACT_ADDRESS ?? "0xe4CE4f5E6d534C51126CB5343bcaba2761eE8103"
 ) as `0x${string}`;
 
-// Build client using genlayer-js SDK with the exported studionet chain.
-// The studionet chain already points at https://studio.genlayer.com/api.
 const client = createClient({ chain: studionet });
 
 export interface GenLayerReview {
@@ -26,79 +24,57 @@ export interface GenLayerReview {
 }
 
 function parseReviewRecord(raw: string): GenLayerReview | null {
-  if (!raw) return null;
   const parts = raw.split("|");
   if (parts.length < 12) return null;
   return {
-    tokenAddress: parts[0] ?? "",
-    chainName: parts[1] ?? "",
+    tokenAddress: (parts[0] ?? "").toLowerCase(),
+    chainName: (parts[1] ?? "").toLowerCase(),
     tokenSymbol: parts[2] ?? "",
-    reviewTimestamp: parseInt(parts[3] ?? "0", 10),
-    riskScore: parseInt(parts[4] ?? "0", 10),
-    topHolderBps: parseInt(parts[5] ?? "0", 10),
-    top10Bps: parseInt(parts[6] ?? "0", 10),
+    reviewTimestamp: Number(parts[3] ?? 0),
+    riskScore: Number(parts[4] ?? 0),
+    topHolderBps: Number(parts[5] ?? 0),
+    top10Bps: Number(parts[6] ?? 0),
     ownershipStatus: parts[7] ?? "",
     liquidityStatus: parts[8] ?? "",
     deployerRiskNote: parts[9] ?? "",
-    recommendation: (parts[10] ?? "WATCH") as "WATCH" | "RESTRICT" | "AVOID",
+    recommendation: ((parts[10] ?? "WATCH") as GenLayerReview["recommendation"]),
     explanation: parts[11] ?? "",
   };
 }
 
-async function readContract(
-  functionName: string,
-  args: Array<string | number | boolean | `0x${string}`> = []
-): Promise<unknown> {
-  if (!CONTRACT_ADDRESS) {
-    logger.warn("GENLAYER_CONTRACT_ADDRESS not set — GenLayer disabled");
-    return null;
-  }
+export async function readGenLayerVerdict(
+  tokenAddress: string,
+  chainName: string,
+): Promise<GenLayerReview | null> {
   try {
     const result = await client.readContract({
-      address: CONTRACT_ADDRESS,
-      functionName,
-      args: args as never,
+      address: GENLAYER_CONTRACT_ADDRESS,
+      functionName: "get_review",
+      args: [tokenAddress.toLowerCase(), chainName.toLowerCase()],
     });
-    return result;
+
+    if (typeof result !== "string" || !result) return null;
+    return parseReviewRecord(result);
   } catch (err) {
-    logger.error({ err, functionName }, "genlayer-js readContract failed");
-    throw err;
+    logger.error({ err, tokenAddress, chainName }, "genlayer-js get_review failed");
+    return null;
   }
 }
 
 export async function getAllReviews(): Promise<GenLayerReview[]> {
   try {
-    const result = await readContract("get_all_reviews");
+    const result = await client.readContract({
+      address: GENLAYER_CONTRACT_ADDRESS,
+      functionName: "get_all_reviews",
+      args: [],
+    });
+
     if (!Array.isArray(result)) return [];
     return result
-      .map((r: unknown) => (typeof r === "string" ? parseReviewRecord(r) : null))
+      .map((r) => (typeof r === "string" ? parseReviewRecord(r) : null))
       .filter((r): r is GenLayerReview => r !== null);
   } catch (err) {
-    logger.error({ err }, "GenLayer getAllReviews failed");
+    logger.error({ err }, "genlayer-js get_all_reviews failed");
     return [];
-  }
-}
-
-export async function getReview(
-  tokenAddress: string,
-  chainName: string
-): Promise<GenLayerReview | null> {
-  try {
-    const result = await readContract("get_review", [tokenAddress, chainName]);
-    if (typeof result !== "string" || !result) return null;
-    return parseReviewRecord(result);
-  } catch (err) {
-    logger.error({ err }, "GenLayer getReview failed");
-    return null;
-  }
-}
-
-export async function getReviewCount(): Promise<number> {
-  try {
-    const result = await readContract("get_review_count");
-    return typeof result === "number" ? result : 0;
-  } catch (err) {
-    logger.error({ err }, "GenLayer getReviewCount failed");
-    return 0;
   }
 }
