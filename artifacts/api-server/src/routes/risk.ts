@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { listingRequestsTable, marketsTable } from "@workspace/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getAllReviews, getReview } from "../lib/genlayer";
+import { getAllReviews, readGenLayerVerdict } from "../lib/genlayer";
 import { fetchTokenByAddress, fetchTokenPrice } from "../lib/dexscreener";
 import { fetchRugCheckReport, normalizeRugCheckReport } from "../lib/rugcheck";
 import { explainTokenRisk } from "../lib/groq";
@@ -28,7 +28,7 @@ router.get("/reviews", async (req, res) => {
 router.get("/reviews/:tokenAddress/:chainName", async (req, res) => {
   try {
     const { tokenAddress, chainName } = GetRiskReviewParams.parse(req.params);
-    const review = await getReview(tokenAddress, chainName);
+    const review = await readGenLayerVerdict(tokenAddress, chainName);
     if (!review) return res.status(404).json({ error: "Review not found" });
     return res.json(review);
   } catch (err) {
@@ -41,7 +41,7 @@ router.post("/submit", async (req, res) => {
   try {
     const body = SubmitTokenForReviewBody.parse(req.body);
     const pairData = await fetchTokenByAddress(body.tokenAddress, body.chainName);
-    const existing = await getReview(body.tokenAddress, body.chainName);
+    const existing = await readGenLayerVerdict(body.tokenAddress, body.chainName);
     if (existing) {
       return res.json({ success: true, review: existing, message: "Review already exists for this token" });
     }
@@ -143,7 +143,7 @@ router.post("/finalize", async (req, res) => {
       return res.status(400).json({ error: "tokenAddress and chainName are required" });
     }
 
-    const review = await getReview(tokenAddress, chainName);
+    const review = await readGenLayerVerdict(tokenAddress, chainName);
     if (!review) {
       return res.status(404).json({ error: "GenLayer verdict not yet confirmed. The transaction may still be processing." });
     }
