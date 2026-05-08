@@ -26,6 +26,11 @@ function requireAdmin(
   return next();
 }
 
+function isDbConnectivityError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return /ENETUNREACH|ECONNREFUSED|ETIMEDOUT|failed query|connect/i.test(message);
+}
+
 // GET /faucet/status/:walletAddress
 router.get("/status/:walletAddress", async (req, res) => {
   try {
@@ -53,7 +58,7 @@ router.get("/status/:walletAddress", async (req, res) => {
       ? new Date(recentClaim.claimedAt.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000).toISOString()
       : null;
 
-    res.json({
+    return res.json({
       walletAddress: addr,
       canClaim,
       nextClaimAt,
@@ -63,7 +68,19 @@ router.get("/status/:walletAddress", async (req, res) => {
     });
   } catch (err) {
     req.log.error({ err }, "getFaucetStatus error");
-    res.status(500).json({ error: "Internal server error" });
+    const serviceUnavailable = isDbConnectivityError(err);
+    return res.status(serviceUnavailable ? 503 : 500).json({
+      error: serviceUnavailable ? "Database unavailable" : "Internal server error",
+      message: serviceUnavailable
+        ? "Unable to check your claim status. Please try again."
+        : "Unexpected server error",
+      walletAddress: typeof req.params.walletAddress === "string" ? req.params.walletAddress.toLowerCase() : null,
+      canClaim: false,
+      nextClaimAt: null,
+      lastClaimedAt: null,
+      totalClaimed: 0,
+      claimAmount: FAUCET_AMOUNT,
+    });
   }
 });
 
@@ -89,7 +106,6 @@ router.post("/claim", async (req, res) => {
       });
     }
 
-    // Ensure wallet exists
     let [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.walletAddress, addr));
     if (!wallet) {
       const [created] = await db.insert(walletsTable).values({ walletAddress: addr }).returning();
@@ -119,13 +135,15 @@ router.post("/claim", async (req, res) => {
     });
   } catch (err) {
     req.log.error({ err }, "claimFaucet error");
-    return res.status(500).json({ error: "Internal server error" });
+    const serviceUnavailable = isDbConnectivityError(err);
+    return res.status(serviceUnavailable ? 503 : 500).json({
+      success: false,
+      error: serviceUnavailable ? "Could not reach server" : "Internal server error",
+      message: serviceUnavailable ? "Unable to process your faucet claim right now. Please try again." : "Unexpected server error",
+    });
   }
 });
 
-// POST /faucet/admin/reset/:walletAddress
-// Admin-only: delete all faucet claim records for a wallet so they can claim again immediately.
-// Requires x-admin-key header or ?key= query param matching ADMIN_PASSWORD env var.
 router.post("/admin/reset/:walletAddress", requireAdmin, async (req, res) => {
   try {
     const addr = (req.params["walletAddress"] ?? "").toLowerCase().trim();
