@@ -8,6 +8,24 @@ const router = Router();
 const FAUCET_AMOUNT = 1000;
 const COOLDOWN_HOURS = 24;
 
+function requireAdmin(
+  req: Parameters<Parameters<typeof router.use>[0]>[0],
+  res: Parameters<Parameters<typeof router.use>[0]>[1],
+  next: Parameters<Parameters<typeof router.use>[0]>[2]
+) {
+  const key =
+    (req.headers["x-admin-key"] as string | undefined) ??
+    (req.query["key"] as string | undefined);
+  const adminPassword = process.env["ADMIN_PASSWORD"];
+  if (!adminPassword) {
+    return res.status(503).json({ error: "ADMIN_PASSWORD not configured on server" });
+  }
+  if (!key || key !== adminPassword) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+}
+
 // GET /faucet/status/:walletAddress
 router.get("/status/:walletAddress", async (req, res) => {
   try {
@@ -67,6 +85,7 @@ router.post("/claim", async (req, res) => {
       return res.status(429).json({
         error: "Already claimed",
         message: `Next claim available at ${nextClaimAt.toISOString()}`,
+        nextClaimAt: nextClaimAt.toISOString(),
       });
     }
 
@@ -100,6 +119,32 @@ router.post("/claim", async (req, res) => {
     });
   } catch (err) {
     req.log.error({ err }, "claimFaucet error");
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /faucet/admin/reset/:walletAddress
+// Admin-only: delete all faucet claim records for a wallet so they can claim again immediately.
+// Requires x-admin-key header or ?key= query param matching ADMIN_PASSWORD env var.
+router.post("/admin/reset/:walletAddress", requireAdmin, async (req, res) => {
+  try {
+    const addr = (req.params["walletAddress"] ?? "").toLowerCase().trim();
+    if (!addr) return res.status(400).json({ error: "walletAddress required" });
+
+    const deleted = await db
+      .delete(faucetClaimsTable)
+      .where(eq(faucetClaimsTable.walletAddress, addr))
+      .returning();
+
+    req.log.info({ addr, deletedCount: deleted.length }, "admin faucet reset");
+    return res.json({
+      success: true,
+      walletAddress: addr,
+      deletedClaims: deleted.length,
+      message: `Cleared ${deleted.length} claim record(s) for ${addr}. Wallet can now claim immediately.`,
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin faucet reset error");
     return res.status(500).json({ error: "Internal server error" });
   }
 });
