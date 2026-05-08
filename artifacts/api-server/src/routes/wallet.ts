@@ -2,20 +2,32 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { walletsTable } from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { GetWalletProfileParams, RegisterWalletBody } from "@workspace/api-zod";
 
 const router = Router();
 
 // POST /wallet/register
 router.post("/register", async (req, res) => {
   try {
-    const { walletAddress } = RegisterWalletBody.parse(req.body);
+    const raw = (req.body ?? {}) as Record<string, unknown>;
+    const walletAddress =
+      typeof raw.walletAddress === "string" ? raw.walletAddress.trim() : null;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: "walletAddress is required" });
+    }
+
     const addr = walletAddress.toLowerCase();
 
-    const [existing] = await db.select().from(walletsTable).where(eq(walletsTable.walletAddress, addr));
+    const [existing] = await db
+      .select()
+      .from(walletsTable)
+      .where(eq(walletsTable.walletAddress, addr));
 
     if (existing) {
-      await db.update(walletsTable).set({ lastSeenAt: new Date() }).where(eq(walletsTable.walletAddress, addr));
+      await db
+        .update(walletsTable)
+        .set({ lastSeenAt: new Date() })
+        .where(eq(walletsTable.walletAddress, addr));
       return res.json(toProfile(existing));
     }
 
@@ -34,20 +46,27 @@ router.post("/register", async (req, res) => {
 // GET /wallet/:walletAddress
 router.get("/:walletAddress", async (req, res) => {
   try {
-    const { walletAddress } = GetWalletProfileParams.parse(req.params);
-    const addr = walletAddress.toLowerCase();
+    const raw = (req.params.walletAddress ?? "").trim().toLowerCase();
+    if (!raw) return res.status(400).json({ error: "walletAddress is required" });
 
-    const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.walletAddress, addr));
+    const [wallet] = await db
+      .select()
+      .from(walletsTable)
+      .where(eq(walletsTable.walletAddress, raw));
 
     if (!wallet) {
-      // Auto-create on first access
-      const [created] = await db.insert(walletsTable).values({ walletAddress: addr }).returning();
+      const [created] = await db
+        .insert(walletsTable)
+        .values({ walletAddress: raw })
+        .returning();
       return res.json(toProfile(created!));
     }
 
-    // Get rank
-    const allWallets = await db.select().from(walletsTable).orderBy(desc(walletsTable.totalRealizedPnl));
-    const rank = allWallets.findIndex((w) => w.walletAddress === addr) + 1;
+    const allWallets = await db
+      .select()
+      .from(walletsTable)
+      .orderBy(desc(walletsTable.totalRealizedPnl));
+    const rank = allWallets.findIndex((w) => w.walletAddress === raw) + 1;
 
     return res.json({ ...toProfile(wallet), rank });
   } catch (err) {
