@@ -9,7 +9,6 @@ import { explainTokenRisk } from "../lib/groq";
 import {
   GetRiskReviewParams,
   SubmitTokenForReviewBody,
-  CreateListingRequestBody,
 } from "@workspace/api-zod";
 import { randomUUID } from "crypto";
 
@@ -37,108 +36,115 @@ router.get("/reviews/:tokenAddress/:chainName", async (req, res) => {
   }
 });
 
+router.post("/rugcheck", async (req, res) => {
+  try {
+    const body = SubmitTokenForReviewBody.parse(req.body);
+    const pairData = await fetchTokenByAddress(body.tokenAddress, body.chainName);
+    const tokenSymbol =
+      body.tokenSymbol?.trim() ||
+      pairData?.baseToken?.symbol ||
+      body.tokenAddress.slice(0, 8).toUpperCase();
+
+    const rugCheckReport = await fetchRugCheckReport(body.tokenAddress);
+    if (!rugCheckReport) {
+      return res.status(404).json({ error: "RugCheck report unavailable for this token" });
+    }
+
+    const normalized = normalizeRugCheckReport(rugCheckReport, tokenSymbol);
+
+    return res.json({
+      success: true,
+      rugcheck: {
+        tokenAddress: body.tokenAddress.toLowerCase(),
+        chainName: body.chainName.toLowerCase(),
+        tokenSymbol,
+        reviewTimestamp: Math.floor(Date.now() / 1000),
+        ...normalized,
+      },
+      rawReport: rugCheckReport,
+    });
+  } catch (err) {
+    req.log.error({ err }, "rugcheckOnly error");
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.post("/submit", async (req, res) => {
   try {
     const body = SubmitTokenForReviewBody.parse(req.body);
     const pairData = await fetchTokenByAddress(body.tokenAddress, body.chainName);
-    const existing = await readGenLayerVerdict(body.tokenAddress, body.chainName);
-    if (existing) {
-      return res.json({ success: true, review: existing, message: "Review already exists for this token" });
-    }
+    const tokenSymbol =
+      body.tokenSymbol?.trim() ||
+      pairData?.baseToken?.symbol ||
+      body.tokenAddress.slice(0, 8).toUpperCase();
 
-    const tokenSymbol = pairData?.baseToken?.symbol ?? body.tokenAddress.slice(0, 8).toUpperCase();
     const rugCheckReport = await fetchRugCheckReport(body.tokenAddress);
-
-    let riskData:
-      | {
-          riskScore: number;
-          topHolderBps: number;
-          top10Bps: number;
-          ownershipStatus: string;
-          liquidityStatus: string;
-          deployerRiskNote: string;
-          recommendation: "WATCH" | "RESTRICT" | "AVOID";
-          explanation: string;
-        }
-      | ReturnType<typeof normalizeRugCheckReport>;
-
-    if (rugCheckReport) {
-      riskData = normalizeRugCheckReport(rugCheckReport, tokenSymbol);
-      req.log.info({ tokenAddress: body.tokenAddress, source: "rugcheck", score: riskData.riskScore }, "RugCheck analysis complete");
-    } else {
-      const topHolderBps = Math.floor(Math.random() * 2000) + 500;
-      const top10Bps = Math.floor(Math.random() * 4000) + 2000;
-      const ownershipStatus = body.chainName === "ethereum" ? "renounced" : Math.random() > 0.4 ? "renounced" : "active";
-      const liquidityStatus = Math.random() > 0.35 ? "locked" : "unlocked";
-
-      let riskScore = 25;
-      if (topHolderBps > 2000) riskScore = Math.max(riskScore, 75);
-      if (top10Bps > 6000) riskScore = Math.max(riskScore, 80);
-      if (liquidityStatus !== "locked") riskScore = Math.max(riskScore, 70);
-      if (ownershipStatus !== "renounced") riskScore = Math.max(riskScore, 65);
-
-      const recommendation: "WATCH" | "RESTRICT" | "AVOID" =
-        riskScore >= 80 ? "AVOID" : riskScore >= 55 ? "RESTRICT" : "WATCH";
-
-      const explanationParts: string[] = [];
-      if (topHolderBps > 2000) explanationParts.push("High top holder concentration.");
-      if (top10Bps > 6000) explanationParts.push("Top 10 wallets control large supply.");
-      if (liquidityStatus !== "locked") explanationParts.push("Liquidity is not locked.");
-      if (ownershipStatus !== "renounced") explanationParts.push("Contract ownership not renounced.");
-      if (explanationParts.length === 0) explanationParts.push("Token structure appears relatively safe.");
-
-      riskData = {
-        riskScore,
-        topHolderBps,
-        top10Bps,
-        ownershipStatus,
-        liquidityStatus,
-        deployerRiskNote: "Heuristic analysis (RugCheck unsupported for this chain)",
-        recommendation,
-        explanation: explanationParts.join(" "),
-      };
+    if (!rugCheckReport) {
+      return res.status(404).json({ error: "RugCheck report unavailable for this token" });
     }
 
-    const review = {
-      tokenAddress: body.tokenAddress.toLowerCase(),
-      chainName: body.chainName.toLowerCase(),
-      tokenSymbol,
-      reviewTimestamp: Math.floor(Date.now() / 1000),
-      ...riskData,
-    };
-
-    const [market] = await db
-      .select()
-      .from(marketsTable)
-      .where(eq(marketsTable.tokenAddress, body.tokenAddress.toLowerCase()));
-
-    if (market) {
-      const recommendation = riskData.recommendation;
-      const riskScore = riskData.riskScore;
-      const maxLeverage = recommendation === "RESTRICT" ? 2 : recommendation === "WATCH" ? 5 : 1;
-      await db
-        .update(marketsTable)
-        .set({ verdict: recommendation, riskScore, tradingEnabled: recommendation !== "AVOID", maxLeverage })
-        .where(eq(marketsTable.tokenAddress, body.tokenAddress.toLowerCase()));
-    }
-
-    return res.json({ success: true, review, message: "Token risk review completed" });
+    const normalized = normalizeRugCheckReport(rugCheckReport, tokenSymbol);
+    return res.json({
+      success: true,
+      review: {
+        tokenAddress: body.tokenAddress.toLowerCase(),
+        chainName: body.chainName.toLowerCase(),
+        tokenSymbol,
+        reviewTimestamp: Math.floor(Date.now() / 1000),
+        ...normalized,
+      },
+      rawReport: rugCheckReport,
+      message: "RugCheck data loaded",
+    });
   } catch (err) {
     req.log.error({ err }, "submitTokenForReview error");
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /risk/finalize
-// Called by the frontend after GenLayer consensus is confirmed.
-// Automatically: runs Groq AI, upserts market with verdict settings,
-// seeds initial price from DexScreener, updates listing request status.
+router.post("/explain", async (req, res) => {
+  try {
+    const body = req.body as {
+      verdict?: "WATCH" | "RESTRICT" | "AVOID";
+      rugcheckData?: {
+        tokenSymbol?: string;
+        riskScore?: number;
+        explanation?: string;
+        topHolderBps?: number;
+        top10Bps?: number;
+        ownershipStatus?: string;
+        liquidityStatus?: string;
+      };
+    };
+
+    if (!body.verdict || !body.rugcheckData) {
+      return res.status(400).json({ error: "verdict and rugcheckData are required" });
+    }
+
+    const explanation = await explainTokenRisk({
+      tokenSymbol: body.rugcheckData.tokenSymbol ?? "TOKEN",
+      recommendation: body.verdict,
+      riskScore: body.rugcheckData.riskScore ?? 0,
+      explanation: body.rugcheckData.explanation,
+      topHolderBps: body.rugcheckData.topHolderBps,
+      top10Bps: body.rugcheckData.top10Bps,
+      ownershipStatus: body.rugcheckData.ownershipStatus,
+      liquidityStatus: body.rugcheckData.liquidityStatus,
+    });
+
+    return res.json({ success: true, aiExplanation: explanation });
+  } catch (err) {
+    req.log.error({ err }, "explainRisk error");
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.post("/finalize", async (req, res) => {
   try {
-    // Manual validation — no external zod import needed
     const body = req.body as Record<string, unknown>;
     const tokenAddress = typeof body.tokenAddress === "string" ? body.tokenAddress.trim() : null;
     const chainName = typeof body.chainName === "string" ? body.chainName.trim() : null;
+    const localRugcheck = (body.rugcheckData ?? null) as Record<string, unknown> | null;
     if (!tokenAddress || !chainName) {
       return res.status(400).json({ error: "tokenAddress and chainName are required" });
     }
@@ -153,20 +159,17 @@ router.post("/finalize", async (req, res) => {
     const tradingEnabled = review.recommendation !== "AVOID";
     const listingStatus = tradingEnabled ? "approved" : "rejected";
 
-    // 1. Groq AI explanation
     const aiExplanation = await explainTokenRisk({
       tokenSymbol: review.tokenSymbol,
       recommendation: review.recommendation,
       riskScore: review.riskScore,
-      explanation: review.explanation,
-      topHolderBps: review.topHolderBps,
-      top10Bps: review.top10Bps,
-      ownershipStatus: review.ownershipStatus,
-      liquidityStatus: review.liquidityStatus,
+      explanation: typeof localRugcheck?.explanation === "string" ? localRugcheck.explanation : review.explanation,
+      topHolderBps: typeof localRugcheck?.topHolderBps === "number" ? localRugcheck.topHolderBps : review.topHolderBps,
+      top10Bps: typeof localRugcheck?.top10Bps === "number" ? localRugcheck.top10Bps : review.top10Bps,
+      ownershipStatus: typeof localRugcheck?.ownershipStatus === "string" ? localRugcheck.ownershipStatus : review.ownershipStatus,
+      liquidityStatus: typeof localRugcheck?.liquidityStatus === "string" ? localRugcheck.liquidityStatus : review.liquidityStatus,
     });
-    req.log.info({ tokenAddress, verdict: review.recommendation }, "finalize: Groq AI explanation generated");
 
-    // 2. Upsert market
     const [existingMarket] = await db
       .select()
       .from(marketsTable)
@@ -179,7 +182,6 @@ router.post("/finalize", async (req, res) => {
         .update(marketsTable)
         .set({ verdict: review.recommendation, riskScore: review.riskScore, tradingEnabled, maxLeverage })
         .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
-      req.log.info({ symbol: existingMarket.symbol, verdict: review.recommendation }, "Updated existing market");
     } else if (tradingEnabled) {
       try {
         const symbol = review.tokenSymbol.toUpperCase().replace(/[^A-Z0-9]/g, "") || tokenAddress.slice(2, 8).toUpperCase();
@@ -195,19 +197,15 @@ router.post("/finalize", async (req, res) => {
           tradingEnabled,
           maxLeverage,
         });
-        req.log.info({ symbol, verdict: review.recommendation }, "Auto-listed new market");
-      } catch (insertErr) {
-        req.log.warn({ insertErr, tokenAddress }, "Auto-list skipped: symbol conflict");
+      } catch {
         marketSymbol = null;
       }
     }
 
-    // 3. Seed initial price (background, non-blocking)
     if (tradingEnabled) {
       seedMarketPrice(tokenAddress, chainName, marketSymbol, req.log).catch(() => {});
     }
 
-    // 4. Update listing requests
     try {
       await db
         .update(listingRequestsTable)
@@ -218,9 +216,7 @@ router.post("/finalize", async (req, res) => {
             eq(listingRequestsTable.chainName, chainName.toLowerCase()),
           )
         );
-    } catch (updateErr) {
-      req.log.warn({ updateErr }, "Could not update listing requests");
-    }
+    } catch {}
 
     return res.json({ success: true, review, aiExplanation, marketListed: tradingEnabled, listingStatus });
   } catch (err) {
@@ -258,67 +254,18 @@ async function seedMarketPrice(
         await db
           .update(marketsTable)
           .set({
-            currentPrice: priceData.price.toString(),
+            currentPrice: priceData.price,
             priceChange24h: priceData.priceChange24h.toString(),
-            volume24h: priceData.volume24h.toString(),
-            liquidity: priceData.liquidity.toString(),
+            volume24h: "0",
+            liquidity: "0",
             priceUpdatedAt: new Date(),
           })
           .where(eq(marketsTable.tokenAddress, tokenAddress.toLowerCase()));
-        log.info({ tokenAddress, symbol: marketSymbol }, "Seeded initial price (symbol fallback)");
       }
     }
   } catch (err) {
-    log.warn({ err, tokenAddress }, "DexScreener price seed failed");
+    log.warn({ err, tokenAddress }, "Failed seeding market price");
   }
-}
-
-router.get("/listing-requests", async (req, res) => {
-  try {
-    const requests = await db.select().from(listingRequestsTable).orderBy(listingRequestsTable.createdAt);
-    res.json(requests.map(toListingResponse));
-  } catch (err) {
-    req.log.error({ err }, "listListingRequests error");
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.post("/listing-requests", async (req, res) => {
-  try {
-    const body = CreateListingRequestBody.parse(req.body);
-    const [created] = await db
-      .insert(listingRequestsTable)
-      .values({
-        id: randomUUID(),
-        tokenAddress: body.tokenAddress.toLowerCase(),
-        chainName: body.chainName.toLowerCase(),
-        tokenSymbol: body.tokenSymbol ?? null,
-        tokenName: body.tokenName ?? null,
-        submittedBy: body.submittedBy.toLowerCase(),
-        status: "pending",
-        notes: body.notes ?? null,
-      })
-      .returning();
-    return res.status(201).json(toListingResponse(created!));
-  } catch (err) {
-    req.log.error({ err }, "createListingRequest error");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-function toListingResponse(r: typeof listingRequestsTable.$inferSelect) {
-  return {
-    id: r.id,
-    tokenAddress: r.tokenAddress,
-    chainName: r.chainName,
-    tokenSymbol: r.tokenSymbol,
-    tokenName: r.tokenName,
-    submittedBy: r.submittedBy,
-    status: r.status,
-    verdict: r.verdict,
-    notes: r.notes,
-    createdAt: r.createdAt.toISOString(),
-  };
 }
 
 export default router;
