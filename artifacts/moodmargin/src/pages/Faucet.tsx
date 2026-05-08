@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
-import { Droplets, Clock, CheckCircle2, Wallet } from "lucide-react";
+import { Droplets, Clock, CheckCircle2, Wallet, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   useGetFaucetStatus,
@@ -11,7 +11,7 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useConnect, useDisconnect } from "wagmi";
+import { useConnect } from "wagmi";
 
 function Countdown({ nextClaimAt }: { nextClaimAt: string }) {
   const [remaining, setRemaining] = useState("");
@@ -41,9 +41,15 @@ export default function Faucet() {
 
   const addr = address?.toLowerCase() ?? "";
 
-  const { data: status, isLoading } = useGetFaucetStatus(addr, {
+  const {
+    data: status,
+    isLoading,
+    isError: statusError,
+    refetch: refetchStatus,
+  } = useGetFaucetStatus(addr, {
     query: { enabled: !!addr, queryKey: getGetFaucetStatusQueryKey(addr) },
   });
+
   const { data: profile } = useGetWalletProfile(addr, {
     query: { enabled: !!addr },
   });
@@ -102,6 +108,27 @@ export default function Faucet() {
           <div className="rounded-xl border border-border bg-card p-6 text-center">
             {isLoading ? (
               <div className="text-muted-foreground">Loading...</div>
+            ) : statusError ? (
+              /* Server / DB unreachable — show explicit error, not a fake cooldown */
+              <div className="space-y-4">
+                <AlertCircle className="w-12 h-12 text-amber-400 mx-auto" />
+                <div>
+                  <div className="text-base font-semibold text-amber-400">Could not reach server</div>
+                  <div className="text-muted-foreground text-sm mt-1">
+                    Unable to check your claim status. Please try again in a moment.
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void refetchStatus()}
+                  className="gap-2"
+                  data-testid="button-retry-faucet"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Retry
+                </Button>
+              </div>
             ) : status?.canClaim ? (
               <div className="space-y-4">
                 <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />

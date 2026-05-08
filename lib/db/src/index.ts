@@ -1,6 +1,12 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import dns from "node:dns";
 import * as schema from "./schema";
+
+// Force IPv4 DNS resolution globally. Without this, on platforms like Render
+// the database hostname may resolve to an IPv6 address that is unreachable
+// (ENETUNREACH). dns.setDefaultResultOrder is the authoritative Node.js fix.
+dns.setDefaultResultOrder("ipv4first");
 
 const { Pool } = pg;
 
@@ -12,13 +18,13 @@ if (!process.env.DATABASE_URL) {
 
 const poolConfig: pg.PoolConfig = {
   connectionString: process.env.DATABASE_URL,
-  // Force IPv4 — prevents ENETUNREACH on Render and other platforms where
-  // the DB hostname resolves to an IPv6 address that is not reachable.
-  family: 4,
-} as pg.PoolConfig & { family?: number };
+  max: 5,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+};
 
 // Enable SSL for production (Render requires it; rejectUnauthorized: false
-// is needed because Render uses self-signed certs on the internal network).
+// because Render uses self-signed certs on the internal network).
 if (process.env.NODE_ENV === "production" || process.env.RENDER) {
   (poolConfig as Record<string, unknown>).ssl = { rejectUnauthorized: false };
 }
