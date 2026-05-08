@@ -10,35 +10,24 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { useSubmitTokenForReview } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { RiskBadge } from "@/components/RiskBadge";
 import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 
 const CONTRACT_ADDRESS = "0xe4CE4f5E6d534C51126CB5343bcaba2761eE8103" as const;
-const POLL_INTERVAL_MS = 5000;
-const MAX_POLL_ATTEMPTS = 36; // 3 minutes
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_ATTEMPTS = 120;
 
 const formSchema = z.object({
   tokenAddress: z.string().min(10, "Enter a valid contract address"),
   chainName: z.string().min(1, "Select a chain"),
-  tokenSymbol: z.string().optional(),
-  tokenName: z.string().optional(),
 });
 type FormValues = z.infer<typeof formSchema>;
-
-const CHAINS = [
-  { value: "ethereum", label: "Ethereum" },
-  { value: "solana", label: "Solana" },
-  { value: "arbitrum", label: "Arbitrum" },
-  { value: "base", label: "Base" },
-  { value: "bsc", label: "BSC" },
-  { value: "polygon", label: "Polygon" },
-];
 
 type ReviewResult = {
   tokenAddress: string;
@@ -68,25 +57,23 @@ type FinalizeResult = {
   listingStatus: "approved" | "rejected";
 };
 
-type Step = "form" | "results" | "consensus" | "done";
+type Step = "form" | "prefill" | "consensus" | "done";
 
-function ReadOnlyField({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground uppercase tracking-wide">{label}</Label>
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm font-mono text-foreground/80 select-none">
-        {value}
-      </div>
-    </div>
-  );
-}
+const CHAINS = [
+  { value: "ethereum", label: "Ethereum" },
+  { value: "solana", label: "Solana" },
+  { value: "arbitrum", label: "Arbitrum" },
+  { value: "base", label: "Base" },
+  { value: "bsc", label: "BSC" },
+  { value: "polygon", label: "Polygon" },
+];
 
 function StepIndicator({ step }: { step: Step }) {
   const steps = [
-    { key: "form", label: "Analyze" },
-    { key: "results", label: "Review" },
+    { key: "form", label: "Token Input" },
+    { key: "prefill", label: "RugCheck Form" },
     { key: "consensus", label: "Sign & Wait" },
-    { key: "done", label: "Confirmed" },
+    { key: "done", label: "Final Result" },
   ];
   const currentIdx = steps.findIndex((s) => s.key === step);
 
@@ -115,25 +102,23 @@ export default function Submit() {
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>("form");
-  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+  const [rugcheckData, setRugcheckData] = useState<ReviewResult | null>(null);
+  const [editableReview, setEditableReview] = useState<ReviewResult | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [genLayerPending, setGenLayerPending] = useState(false);
   const [finalizeResult, setFinalizeResult] = useState<FinalizeResult | null>(null);
   const [pollAttempts, setPollAttempts] = useState(0);
   const [pollingTimedOut, setPollingTimedOut] = useState(false);
+  const [rugcheckLoading, setRugcheckLoading] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const submitToken = useSubmitTokenForReview();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { tokenAddress: "", chainName: "", tokenSymbol: "", tokenName: "" },
+    defaultValues: { tokenAddress: "", chainName: "" },
   });
 
-  // ── Polling loop: starts when step = "consensus" ─────────────────────────
   useEffect(() => {
-    if (step !== "consensus" || !reviewResult) return;
-
+    if (step !== "consensus" || !editableReview) return;
     let attempts = 0;
 
     const poll = async () => {
@@ -145,47 +130,27 @@ export default function Submit() {
       setPollAttempts(attempts);
 
       try {
-        const res = await fetch(
-          `/api/risk/reviews/${encodeURIComponent(reviewResult.tokenAddress)}/${encodeURIComponent(reviewResult.chainName)}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.recommendation) {
-            // Verdict is on-chain — call finalize to run Groq + update DB
+        const reviewRes = await fetch(`/api/risk/reviews/${encodeURIComponent(editableReview.tokenAddress)}/${encodeURIComponent(editableReview.chainName)}`);
+        if (reviewRes.ok) {
+          const data = await reviewRes.json();
+          if (data?.recommendation) {
             const finalRes = await fetch("/api/risk/finalize", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                tokenAddress: reviewResult.tokenAddress,
-                chainName: reviewResult.chainName,
+                tokenAddress: editableReview.tokenAddress,
+                chainName: editableReview.chainName,
+                rugcheckData: editableReview,
               }),
             });
             if (finalRes.ok) {
-              const finalData = (await finalRes.json()) as FinalizeResult;
-              setFinalizeResult(finalData);
+              setFinalizeResult((await finalRes.json()) as FinalizeResult);
               setStep("done");
-            } else {
-              // Finalize failed but verdict exists — still move forward
-              setFinalizeResult({
-                success: true,
-                review: data as ReviewResult,
-                aiExplanation: {
-                  explanation: `${data.tokenSymbol} has been analyzed with a verdict of ${data.recommendation}.`,
-                  verdict: data.recommendation,
-                  keyRisks: [data.explanation ?? ""],
-                  beginner_summary: `This token received a ${data.recommendation} rating.`,
-                },
-                marketListed: data.recommendation !== "AVOID",
-                listingStatus: data.recommendation !== "AVOID" ? "approved" : "rejected",
-              });
-              setStep("done");
+              return;
             }
-            return; // stop polling
           }
         }
-      } catch (_) {
-        // network hiccup — keep polling
-      }
+      } catch {}
 
       pollingRef.current = setTimeout(poll, POLL_INTERVAL_MS);
     };
@@ -194,67 +159,64 @@ export default function Submit() {
     return () => {
       if (pollingRef.current) clearTimeout(pollingRef.current);
     };
-  }, [step, reviewResult]);
+  }, [step, editableReview]);
 
-  const onSubmit = (values: FormValues) => {
+  const onAnalyze = async (values: FormValues) => {
     if (!address) return;
-    submitToken.mutate(
-      {
-        data: {
-          tokenAddress: values.tokenAddress,
-          chainName: values.chainName,
-          walletAddress: address.toLowerCase(),
-        },
-      },
-      {
-        onSuccess: (res) => {
-          if (res.review) {
-            setReviewResult(res.review as ReviewResult);
-            setStep("results");
-          } else {
-            toast({ title: "No review data", description: res.message ?? "Token could not be analyzed", variant: "destructive" });
-          }
-        },
-        onError: () => {
-          toast({ title: "Analysis failed", description: "Could not analyze token. Check the address and try again.", variant: "destructive" });
-        },
+    setRugcheckLoading(true);
+    try {
+      const res = await fetch("/api/risk/rugcheck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenAddress: values.tokenAddress, chainName: values.chainName, walletAddress: address.toLowerCase() }),
+      });
+      const payload = await res.json();
+      if (!res.ok || !payload?.rugcheck) {
+        throw new Error(payload?.error ?? "RugCheck failed");
       }
-    );
+      setRugcheckData(payload.rugcheck as ReviewResult);
+      setEditableReview(payload.rugcheck as ReviewResult);
+      setStep("prefill");
+    } catch (err: unknown) {
+      toast({ title: "RugCheck failed", description: err instanceof Error ? err.message : "Unable to fetch RugCheck report", variant: "destructive" });
+    } finally {
+      setRugcheckLoading(false);
+    }
+  };
+
+  const updateEditable = (key: keyof ReviewResult, value: string | number) => {
+    if (!editableReview) return;
+    setEditableReview({ ...editableReview, [key]: value });
   };
 
   const handleSubmitToGenLayer = async () => {
-    if (!reviewResult || !address || !isConnected) return;
+    if (!editableReview || !address || !isConnected) return;
 
     const ethereum = (window as unknown as { ethereum?: unknown }).ethereum;
     if (!ethereum) {
-      toast({ title: "No wallet detected", description: "Please install MetaMask and connect to GenLayer Studionet (Chain ID: 61999)", variant: "destructive" });
+      toast({ title: "No wallet detected", description: "Please install MetaMask and connect to GenLayer Studionet", variant: "destructive" });
       return;
     }
 
     setGenLayerPending(true);
     try {
-      const writeClient = createClient({
-        chain: studionet,
-        account: address as `0x${string}`,
-        provider: ethereum,
-      });
-
+      const writeClient = createClient({ chain: studionet, account: address as `0x${string}`, provider: ethereum });
       const hash = await writeClient.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "submit_review",
         args: [
-          reviewResult.tokenAddress,
-          reviewResult.chainName,
-          reviewResult.tokenSymbol,
-          reviewResult.reviewTimestamp,
-          reviewResult.riskScore,
-          reviewResult.topHolderBps,
-          reviewResult.top10Bps,
-          reviewResult.ownershipStatus,
-          reviewResult.liquidityStatus,
-          reviewResult.deployerRiskNote,
-          reviewResult.recommendation,
-          reviewResult.explanation,
+          editableReview.tokenAddress,
+          editableReview.chainName,
+          editableReview.tokenSymbol,
+          editableReview.reviewTimestamp,
+          editableReview.riskScore,
+          editableReview.topHolderBps,
+          editableReview.top10Bps,
+          editableReview.ownershipStatus,
+          editableReview.liquidityStatus,
+          editableReview.deployerRiskNote,
+          editableReview.recommendation,
+          editableReview.explanation,
         ],
       });
 
@@ -262,10 +224,8 @@ export default function Submit() {
       setPollAttempts(0);
       setPollingTimedOut(false);
       setStep("consensus");
-      toast({ title: "Transaction submitted!", description: "Waiting for GenLayer validators to confirm..." });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Transaction failed or was rejected";
-      toast({ title: "GenLayer error", description: msg, variant: "destructive" });
+      toast({ title: "GenLayer error", description: err instanceof Error ? err.message : "Transaction failed", variant: "destructive" });
     } finally {
       setGenLayerPending(false);
     }
@@ -274,19 +234,13 @@ export default function Submit() {
   const handleReset = () => {
     if (pollingRef.current) clearTimeout(pollingRef.current);
     setStep("form");
-    setReviewResult(null);
+    setRugcheckData(null);
+    setEditableReview(null);
     setTxHash(null);
     setFinalizeResult(null);
     setPollAttempts(0);
     setPollingTimedOut(false);
     form.reset();
-  };
-
-  const handleRetryFinalize = async () => {
-    if (!reviewResult) return;
-    setPollAttempts(0);
-    setPollingTimedOut(false);
-    setStep("consensus");
   };
 
   return (
@@ -295,289 +249,108 @@ export default function Submit() {
         <Send className="w-6 h-6 text-primary" />
         <h1 className="text-3xl font-bold" style={{ fontFamily: "Space Grotesk, sans-serif" }}>Submit Token</h1>
       </div>
-      <p className="text-muted-foreground mb-8">
-        Analyze a token with RugCheck, then record the verdict on GenLayer for AI review and auto-listing
-      </p>
-
+      <p className="text-muted-foreground mb-8">RugCheck first, then submit edited data to GenLayer, then wait for verdict and explanation.</p>
       <StepIndicator step={step} />
 
       <div className="rounded-xl border border-border bg-card p-6">
-
-        {/* ── STEP 1: FORM ── */}
         {step === "form" && (
-          <>
-            {!isConnected ? (
-              <div className="py-8 text-center">
-                <Wallet className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground mb-4">Connect your wallet to submit a token</p>
-                <Button className="bg-primary" onClick={() => connect({ connector: connectors[0] })}>
-                  Connect Wallet
-                </Button>
+          !isConnected ? (
+            <div className="py-8 text-center">
+              <Wallet className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground mb-4">Connect your wallet to submit a token</p>
+              <Button className="bg-primary" onClick={() => connect({ connector: connectors[0] })}>Connect Wallet</Button>
+            </div>
+          ) : (
+            <form onSubmit={form.handleSubmit(onAnalyze)} className="space-y-5">
+              <div>
+                <Label>Token Contract Address</Label>
+                <Input {...form.register("tokenAddress")} className="mt-1.5" placeholder="0x..." />
               </div>
-            ) : (
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-                <div>
-                  <Label className="text-sm">Token Contract Address <span className="text-red-400">*</span></Label>
-                  <Input
-                    {...form.register("tokenAddress")}
-                    placeholder="0x... or Solana mint address"
-                    className="mt-1.5"
-                    data-testid="input-token-address"
-                  />
-                  {form.formState.errors.tokenAddress && (
-                    <p className="text-xs text-red-400 mt-1">{form.formState.errors.tokenAddress.message}</p>
-                  )}
-                </div>
-
-                <div>
-                  <Label className="text-sm">Chain <span className="text-red-400">*</span></Label>
-                  <Select onValueChange={(v) => form.setValue("chainName", v)}>
-                    <SelectTrigger className="mt-1.5" data-testid="select-chain">
-                      <SelectValue placeholder="Select chain" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CHAINS.map((c) => (
-                        <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {form.formState.errors.chainName && (
-                    <p className="text-xs text-red-400 mt-1">{form.formState.errors.chainName.message}</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm">Token Symbol (optional)</Label>
-                    <Input {...form.register("tokenSymbol")} placeholder="BONK" className="mt-1.5" data-testid="input-token-symbol" />
-                  </div>
-                  <div>
-                    <Label className="text-sm">Token Name (optional)</Label>
-                    <Input {...form.register("tokenName")} placeholder="Bonk" className="mt-1.5" data-testid="input-token-name" />
-                  </div>
-                </div>
-
-                <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-                  <p className="text-xs text-muted-foreground">
-                    RugCheck analyzes the token. You then sign a transaction on GenLayer Studionet. The verdict automatically triggers a Groq AI review and updates market listing settings.
-                  </p>
-                </div>
-
-                <Button
-                  type="submit"
-                  className="w-full bg-primary hover:bg-primary/90"
-                  disabled={submitToken.isPending}
-                  data-testid="button-analyze"
-                >
-                  {submitToken.isPending ? (
-                    <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Analyzing with RugCheck...</span>
-                  ) : "Analyze Token"}
-                </Button>
-              </form>
-            )}
-          </>
+              <div>
+                <Label>Chain</Label>
+                <Select onValueChange={(v) => form.setValue("chainName", v)}>
+                  <SelectTrigger className="mt-1.5"><SelectValue placeholder="Select chain" /></SelectTrigger>
+                  <SelectContent>{CHAINS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <Button type="submit" className="w-full" disabled={rugcheckLoading}>
+                {rugcheckLoading ? <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Running RugCheck...</span> : "Run RugCheck"}
+              </Button>
+            </form>
+          )
         )}
 
-        {/* ── STEP 2: RESULTS ── */}
-        {step === "results" && reviewResult && (
-          <div className="space-y-6">
+        {step === "prefill" && editableReview && (
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-bold text-lg">{reviewResult.tokenSymbol}</h2>
-                <p className="text-xs text-muted-foreground">{reviewResult.chainName} • RugCheck Analysis Complete</p>
-              </div>
-              <RiskBadge verdict={reviewResult.recommendation} />
+              <h2 className="font-bold text-lg">RugCheck Pre-filled Form</h2>
+              <RiskBadge verdict={editableReview.recommendation} />
             </div>
-
-            <div className="rounded-lg bg-muted/20 border border-border p-4">
-              <p className="text-xs text-muted-foreground mb-3 uppercase tracking-wide font-medium">RugCheck Results — Read Only</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ReadOnlyField label="Risk Score" value={`${reviewResult.riskScore} / 100`} />
-                <ReadOnlyField label="Recommendation" value={reviewResult.recommendation} />
-                <ReadOnlyField label="Top Holder" value={`${(reviewResult.topHolderBps / 100).toFixed(2)}%`} />
-                <ReadOnlyField label="Top 10 Holders" value={`${(reviewResult.top10Bps / 100).toFixed(2)}%`} />
-                <ReadOnlyField label="Ownership" value={reviewResult.ownershipStatus} />
-                <ReadOnlyField label="Liquidity" value={reviewResult.liquidityStatus} />
-              </div>
-              <div className="mt-3 space-y-3">
-                <ReadOnlyField label="Deployer Risk Note" value={reviewResult.deployerRiskNote} />
-                <ReadOnlyField label="Explanation" value={reviewResult.explanation} />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><Label>Token Symbol</Label><Input value={editableReview.tokenSymbol} onChange={(e) => updateEditable("tokenSymbol", e.target.value)} /></div>
+              <div><Label>Risk Score</Label><Input type="number" value={editableReview.riskScore} onChange={(e) => updateEditable("riskScore", Number(e.target.value))} /></div>
+              <div><Label>Top Holder BPS</Label><Input type="number" value={editableReview.topHolderBps} onChange={(e) => updateEditable("topHolderBps", Number(e.target.value))} /></div>
+              <div><Label>Top 10 BPS</Label><Input type="number" value={editableReview.top10Bps} onChange={(e) => updateEditable("top10Bps", Number(e.target.value))} /></div>
+              <div><Label>Ownership</Label><Input value={editableReview.ownershipStatus} onChange={(e) => updateEditable("ownershipStatus", e.target.value)} /></div>
+              <div><Label>Liquidity</Label><Input value={editableReview.liquidityStatus} onChange={(e) => updateEditable("liquidityStatus", e.target.value)} /></div>
+              <div><Label>Recommendation</Label><Input value={editableReview.recommendation} onChange={(e) => updateEditable("recommendation", e.target.value as ReviewResult["recommendation"])} /></div>
             </div>
-
-            <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 flex items-start gap-2">
-              <Shield className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-              <p className="text-xs text-muted-foreground">
-                <span className="text-amber-400 font-medium">Next:</span> Click below to submit this data to GenLayer. Make sure MetaMask is on <span className="text-foreground">GenLayer Studionet (Chain ID: 61999)</span>. After you sign, GenLayer validators process the verdict, Groq generates an AI explanation, and the market listing is updated automatically.
-              </p>
-            </div>
-
+            <div><Label>Deployer Risk Note</Label><Textarea value={editableReview.deployerRiskNote} onChange={(e) => updateEditable("deployerRiskNote", e.target.value)} /></div>
+            <div><Label>Explanation</Label><Textarea value={editableReview.explanation} onChange={(e) => updateEditable("explanation", e.target.value)} /></div>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={handleReset}>Start Over</Button>
-              <Button
-                className="flex-1 bg-primary hover:bg-primary/90"
-                onClick={handleSubmitToGenLayer}
-                disabled={genLayerPending || !isConnected}
-                data-testid="button-submit-genlayer"
-              >
-                {genLayerPending ? (
-                  <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Awaiting Signature...</span>
-                ) : (
-                  <span className="flex items-center gap-2"><Shield className="w-4 h-4" />Submit to GenLayer</span>
-                )}
+              <Button className="flex-1" onClick={handleSubmitToGenLayer} disabled={genLayerPending}>
+                {genLayerPending ? <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Awaiting Signature...</span> : <span className="flex items-center gap-2"><Shield className="w-4 h-4" />Submit to GenLayer</span>}
               </Button>
             </div>
+            {rugcheckData && <p className="text-xs text-muted-foreground">Raw RugCheck recommendation: {rugcheckData.recommendation}</p>}
           </div>
         )}
 
-        {/* ── STEP 3: CONSENSUS POLLING ── */}
         {step === "consensus" && (
-          <div className="py-4 space-y-6">
-            {/* Tx hash */}
-            {txHash && (
-              <div className="rounded-lg border border-border bg-muted/20 p-3">
-                <p className="text-xs text-muted-foreground mb-1">Transaction Hash</p>
-                <a
-                  href={`https://studio.genlayer.com/tx/${txHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-mono text-primary flex items-center gap-1 hover:underline break-all"
-                >
-                  {txHash.slice(0, 24)}...{txHash.slice(-8)}
-                  <ExternalLink className="w-3 h-3 shrink-0" />
-                </a>
-              </div>
-            )}
-
+          <div className="space-y-4 text-center">
+            {txHash && <a href={`https://studio.genlayer.com/tx/${txHash}`} target="_blank" rel="noreferrer" className="text-xs font-mono text-primary inline-flex items-center gap-1">{txHash.slice(0, 18)}...{txHash.slice(-8)}<ExternalLink className="w-3 h-3" /></a>}
             {!pollingTimedOut ? (
-              <div className="text-center space-y-4">
-                <div className="relative mx-auto w-16 h-16">
-                  <div className="absolute inset-0 rounded-full border-4 border-primary/20" />
-                  <div className="absolute inset-0 rounded-full border-4 border-t-primary animate-spin" />
-                  <Shield className="absolute inset-0 m-auto w-6 h-6 text-primary" />
-                </div>
-                <div>
-                  <p className="font-semibold">Waiting for GenLayer Consensus</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Validators are confirming your transaction…
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Check {pollAttempts} / {MAX_POLL_ATTEMPTS} — polling every 5 s
-                  </p>
-                </div>
-                <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 text-left">
-                  <p className="text-xs text-muted-foreground">
-                    Once confirmed, Groq AI will generate a plain-language explanation and the market listing will be updated automatically. You can leave this page — the verdict is already recorded on-chain.
-                  </p>
-                </div>
-              </div>
+              <>
+                <Loader2 className="w-10 h-10 animate-spin mx-auto text-primary" />
+                <p>Waiting for GenLayer verdict... polling every 2s ({pollAttempts}/{MAX_POLL_ATTEMPTS})</p>
+              </>
             ) : (
-              <div className="text-center space-y-4">
+              <>
                 <AlertCircle className="w-12 h-12 text-amber-400 mx-auto" />
-                <div>
-                  <p className="font-semibold">Polling timed out</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Your transaction was submitted but GenLayer hasn't confirmed yet. This can take a few minutes.
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  <Button variant="outline" className="flex-1" onClick={handleReset}>Submit Another</Button>
-                  <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={handleRetryFinalize}>
-                    Keep Waiting
-                  </Button>
-                </div>
-              </div>
+                <p>Polling timed out. Transaction submitted successfully; verdict may appear soon.</p>
+                <Button onClick={() => { setPollingTimedOut(false); setStep("consensus"); }}>Keep Waiting</Button>
+              </>
             )}
           </div>
         )}
 
-        {/* ── STEP 4: DONE ── */}
         {step === "done" && finalizeResult && (
           <div className="space-y-5">
             <div className="text-center">
               <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto mb-3" />
-              <h2 className="text-xl font-bold mb-1">Verdict Confirmed on GenLayer</h2>
-              <p className="text-sm text-muted-foreground">
-                {finalizeResult.marketListed
-                  ? "Token has been automatically listed for trading."
-                  : "Token was rejected from listing (AVOID verdict)."}
-              </p>
+              <h2 className="text-xl font-bold">Verdict Confirmed</h2>
             </div>
-
-            {/* Verdict summary */}
             <div className="rounded-lg border border-border bg-muted/20 p-4 flex items-center justify-between">
               <div>
                 <p className="font-semibold text-sm">{finalizeResult.review.tokenSymbol}</p>
-                <p className="text-xs text-muted-foreground">{finalizeResult.review.chainName} • Risk score: {finalizeResult.review.riskScore}/100</p>
+                <p className="text-xs text-muted-foreground">Risk score: {finalizeResult.review.riskScore}/100</p>
               </div>
               <div className="flex items-center gap-2">
                 <RiskBadge verdict={finalizeResult.review.recommendation} />
-                {finalizeResult.marketListed ? (
-                  <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />Listed
-                  </span>
-                ) : (
-                  <span className="text-xs text-red-400 font-medium flex items-center gap-1">
-                    <XCircle className="w-3.5 h-3.5" />Rejected
-                  </span>
-                )}
+                {finalizeResult.marketListed ? <span className="text-xs text-emerald-400 font-medium flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" />Market will be listed</span> : <span className="text-xs text-red-400 font-medium flex items-center gap-1"><XCircle className="w-3.5 h-3.5" />Rejected</span>}
               </div>
             </div>
-
-            {/* Groq AI explanation */}
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Brain className="w-4 h-4 text-primary" />
-                <span className="text-sm font-semibold text-primary">Groq AI Analysis</span>
-              </div>
-              <p className="text-sm text-foreground/90 leading-relaxed mb-3">
-                {finalizeResult.aiExplanation.explanation}
-              </p>
-              {finalizeResult.aiExplanation.beginner_summary && (
-                <div className="rounded-md bg-background/50 border border-border p-2 mb-3">
-                  <p className="text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground/70">Plain English: </span>
-                    {finalizeResult.aiExplanation.beginner_summary}
-                  </p>
-                </div>
-              )}
-              {finalizeResult.aiExplanation.keyRisks && finalizeResult.aiExplanation.keyRisks.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Key Risks</p>
-                  <ul className="space-y-1">
-                    {finalizeResult.aiExplanation.keyRisks.map((r, i) => (
-                      <li key={i} className="text-xs text-muted-foreground flex items-start gap-1.5">
-                        <span className="text-red-400 mt-0.5">•</span>{r}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              <div className="flex items-center gap-2 mb-2"><Brain className="w-4 h-4 text-primary" /><span className="text-sm font-semibold text-primary">Groq AI Explanation</span></div>
+              <p className="text-sm mb-2">{finalizeResult.aiExplanation.explanation}</p>
+              <p className="text-xs text-muted-foreground mb-2">{finalizeResult.aiExplanation.beginner_summary}</p>
+              <ul className="space-y-1">{finalizeResult.aiExplanation.keyRisks.map((r, i) => <li key={i} className="text-xs">• {r}</li>)}</ul>
             </div>
-
-            {/* Tx link */}
-            {txHash && (
-              <a
-                href={`https://studio.genlayer.com/tx/${txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
-              >
-                View transaction on GenLayer Explorer
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={handleReset}>Submit Another</Button>
-              <Button
-                className="flex-1 bg-primary hover:bg-primary/90"
-                onClick={() => window.location.href = "/risk"}
-              >
-                View Risk Board
-              </Button>
+            <div className="rounded-md border border-border p-3 text-sm">
+              <p>Leverage rules: WATCH = 5x, RESTRICT = 2x, AVOID = 1x (disabled listing).</p>
             </div>
+            <Button className="w-full" onClick={handleReset}>Submit Another</Button>
           </div>
         )}
       </div>
