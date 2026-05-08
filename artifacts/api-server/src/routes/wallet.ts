@@ -5,7 +5,25 @@ import { eq, desc } from "drizzle-orm";
 
 const router = Router();
 
-// POST /wallet/register
+function isDbConnectivityError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return /ENETUNREACH|ECONNREFUSED|ETIMEDOUT|failed query|connect/i.test(message);
+}
+
+function fallbackProfile(walletAddress: string) {
+  const now = new Date().toISOString();
+  return {
+    walletAddress,
+    mmUsdBalance: 5000,
+    totalRealizedPnl: 0,
+    totalTrades: 0,
+    openPositionsCount: 0,
+    createdAt: now,
+    lastSeenAt: now,
+    rank: 0,
+  };
+}
+
 router.post("/register", async (req, res) => {
   try {
     const raw = (req.body ?? {}) as Record<string, unknown>;
@@ -24,11 +42,12 @@ router.post("/register", async (req, res) => {
       .where(eq(walletsTable.walletAddress, addr));
 
     if (existing) {
-      await db
+      const [updated] = await db
         .update(walletsTable)
         .set({ lastSeenAt: new Date() })
-        .where(eq(walletsTable.walletAddress, addr));
-      return res.json(toProfile(existing));
+        .where(eq(walletsTable.walletAddress, addr))
+        .returning();
+      return res.json(toProfile(updated ?? existing));
     }
 
     const [created] = await db
@@ -39,11 +58,18 @@ router.post("/register", async (req, res) => {
     return res.json(toProfile(created!));
   } catch (err) {
     req.log.error({ err }, "registerWallet error");
+    const addr = typeof req.body?.walletAddress === "string" ? req.body.walletAddress.trim().toLowerCase() : "";
+    if (addr && isDbConnectivityError(err)) {
+      return res.status(503).json({
+        error: "Database unavailable",
+        message: "Could not reach server",
+        ...fallbackProfile(addr),
+      });
+    }
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /wallet/:walletAddress
 router.get("/:walletAddress", async (req, res) => {
   try {
     const raw = (req.params.walletAddress ?? "").trim().toLowerCase();
@@ -71,6 +97,14 @@ router.get("/:walletAddress", async (req, res) => {
     return res.json({ ...toProfile(wallet), rank });
   } catch (err) {
     req.log.error({ err }, "getWalletProfile error");
+    const raw = (req.params.walletAddress ?? "").trim().toLowerCase();
+    if (raw && isDbConnectivityError(err)) {
+      return res.status(503).json({
+        error: "Database unavailable",
+        message: "Could not reach server",
+        ...fallbackProfile(raw),
+      });
+    }
     return res.status(500).json({ error: "Internal server error" });
   }
 });

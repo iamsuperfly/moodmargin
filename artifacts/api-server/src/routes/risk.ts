@@ -37,6 +37,7 @@ router.get("/reviews/:tokenAddress/:chainName", async (req, res) => {
 });
 
 router.post("/rugcheck", async (req, res) => {
+  res.type("application/json");
   try {
     const body = SubmitTokenForReviewBody.parse(req.body);
     const pairData = await fetchTokenByAddress(body.tokenAddress, body.chainName);
@@ -65,7 +66,14 @@ router.post("/rugcheck", async (req, res) => {
     });
   } catch (err) {
     req.log.error({ err }, "rugcheckOnly error");
-    return res.status(500).json({ error: "Internal server error" });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return res.status(500).json({
+      success: false,
+      error: "RugCheck failed",
+      message: "Server returned an invalid response. Please try again.",
+      details: message,
+      rugcheck: null,
+    });
   }
 });
 
