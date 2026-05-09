@@ -4,7 +4,6 @@ import {
   integer,
   boolean,
   timestamp,
-  serial,
   uuid,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -132,7 +131,7 @@ export type ListingRequest = typeof listingRequestsTable.$inferSelect;
 // price_history  (queried via raw SQL in /markets/:symbol/history route)
 // ---------------------------------------------------------------------------
 export const priceHistoryTable = pgTable("price_history", {
-  id: serial("id").primaryKey(),
+  id: integer("id").generatedAlwaysAsIdentity().primaryKey(),
   symbol: text("symbol").notNull(),
   price: text("price").notNull(),
   priceChange24h: text("price_change_24h"),
