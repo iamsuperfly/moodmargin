@@ -6,7 +6,7 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
 // ---------------------------------------------------------------------------
@@ -34,9 +34,11 @@ export const marketsTable = pgTable("markets", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// id is a plain text PK (routes supply it via randomUUID) — keep it in insert schema
 export const insertMarketSchema = createInsertSchema(marketsTable).omit({
   createdAt: true,
 });
+export const selectMarketSchema = createSelectSchema(marketsTable);
 export type InsertMarket = z.infer<typeof insertMarketSchema>;
 export type Market = typeof marketsTable.$inferSelect;
 
@@ -53,10 +55,12 @@ export const walletsTable = pgTable("wallets", {
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
 });
 
+// walletAddress is the PK (text, caller-supplied) — keep it in insert schema
 export const insertWalletSchema = createInsertSchema(walletsTable).omit({
   createdAt: true,
   lastSeenAt: true,
 });
+export const selectWalletSchema = createSelectSchema(walletsTable);
 export type InsertWallet = z.infer<typeof insertWalletSchema>;
 export type Wallet = typeof walletsTable.$inferSelect;
 
@@ -82,9 +86,11 @@ export const positionsTable = pgTable("positions", {
   closedAt: timestamp("closed_at"),
 });
 
+// id is a plain text PK (routes supply it via randomUUID) — keep it in insert schema
 export const insertPositionSchema = createInsertSchema(positionsTable).omit({
   openedAt: true,
 });
+export const selectPositionSchema = createSelectSchema(positionsTable);
 export type InsertPosition = z.infer<typeof insertPositionSchema>;
 export type Position = typeof positionsTable.$inferSelect;
 
@@ -98,10 +104,12 @@ export const faucetClaimsTable = pgTable("faucet_claims", {
   claimedAt: timestamp("claimed_at").notNull().defaultNow(),
 });
 
+// id has .defaultRandom() so drizzle-zod makes it optional — safe to omit
 export const insertFaucetClaimSchema = createInsertSchema(faucetClaimsTable).omit({
   id: true,
   claimedAt: true,
 });
+export const selectFaucetClaimSchema = createSelectSchema(faucetClaimsTable);
 export type InsertFaucetClaim = z.infer<typeof insertFaucetClaimSchema>;
 export type FaucetClaim = typeof faucetClaimsTable.$inferSelect;
 
@@ -121,9 +129,11 @@ export const listingRequestsTable = pgTable("listing_requests", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// id is a plain text PK (routes supply it via randomUUID) — keep it in insert schema
 export const insertListingRequestSchema = createInsertSchema(listingRequestsTable).omit({
   createdAt: true,
 });
+export const selectListingRequestSchema = createSelectSchema(listingRequestsTable);
 export type InsertListingRequest = z.infer<typeof insertListingRequestSchema>;
 export type ListingRequest = typeof listingRequestsTable.$inferSelect;
 
@@ -140,9 +150,11 @@ export const priceHistoryTable = pgTable("price_history", {
   recordedAt: timestamp("recorded_at").notNull().defaultNow(),
 });
 
+// id is GENERATED ALWAYS AS IDENTITY — drizzle-zod excludes it from the insert
+// schema entirely, so DO NOT omit it (omitting a non-existent key throws in Zod v4)
 export const insertPriceHistorySchema = createInsertSchema(priceHistoryTable).omit({
-  id: true,
   recordedAt: true,
 });
+export const selectPriceHistorySchema = createSelectSchema(priceHistoryTable);
 export type InsertPriceHistory = z.infer<typeof insertPriceHistorySchema>;
 export type PriceHistory = typeof priceHistoryTable.$inferSelect;
